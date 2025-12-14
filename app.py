@@ -58,6 +58,7 @@ def load_users():
         with open(USERS_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception:
+        # 如果文件存在但读取失败，可能是损坏，也尝试重置
         save_users(DEFAULT_USERS)
         return DEFAULT_USERS
 
@@ -727,6 +728,13 @@ def main_app():
 
 
 if __name__ == '__main__':
+    # 重要的初始化步骤
+    # 确保所有文件在 Streamlit 启动前都已初始化，解决登录失败问题
+    load_users()
+    load_config()
+    load_athletes_data()
+    load_records_data()
+    
     initial_config = load_config() 
     
     st.set_page_config(
