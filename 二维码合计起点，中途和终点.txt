@@ -1,0 +1,12 @@
+
+起点
+http://127.0.0.1:5000//scan?point=start
+
+中途：
+http://127.0.0.1:5000/scan?point=mid
+
+终点：
+http://127.0.0.1:5000/scan?point=finish
+
+陈琳1005
+张禹同1006

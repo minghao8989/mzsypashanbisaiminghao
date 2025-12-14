@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>明豪杯登山比赛报名表</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; max-width: 500px; margin: auto; }
+        h2 { text-align: center; color: #007bff; }
+        label { display: block; margin-top: 10px; font-weight: bold; }
+        input[type="text"], input[type="tel"], select { width: 100%; padding: 10px; margin-top: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        button { background-color: #28a745; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%; margin-top: 20px; font-size: 16px; }
+        .success { background-color: #d4edda; color: #155724; padding: 10px; border-radius: 4px; margin-top: 15px; text-align: center; font-weight: bold;}
+        .error { background-color: #f8d7da; color: #721c24; padding: 10px; border-radius: 4px; margin-top: 15px; text-align: center; }
+    </style>
+</head>
+<body>
+    <h2>🏆 明豪杯登山比赛资料登记</h2>
+    <p>请准确填写您的参赛资料，您的比赛编号将自动生成。</p>
+
+    {% if success %}
+        <div class="success">{{ success }}</div>
+    {% endif %}
+    {% if error %}
+        <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST">
+        <label for="department">部门/科室:</label>
+        <input type="text" id="department" name="department" required>
+
+        <label for="name">姓名:</label>
+        <input type="text" id="name" name="name" required>
+
+        <label for="gender">性别:</label>
+        <select id="gender" name="gender" required>
+            <option value="">请选择</option>
+            <option value="男">男</option>
+            <option value="女">女</option>
+            <option value="其他">其他</option>
+        </select>
+
+        <label for="phone">手机号 (用于身份验证):</label>
+        <input type="tel" id="phone" name="phone" required>
+
+        <button type="submit">提交资料并获取比赛编号</button>
+    </form>
+</body>
+</html>

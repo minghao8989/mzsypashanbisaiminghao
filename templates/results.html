@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实时排名榜单 - 比赛结果</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; max-width: 1200px; margin: auto; }
+        h2 { text-align: center; color: #007bff; }
+        h3 { text-align: center; margin-top: -10px; color: #6c757d; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background-color: #f2f2f2; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        .podium { font-weight: bold; }
+        .gold { background-color: #ffd700; }
+        .silver { background-color: #c0c0c0; }
+        .bronze { background-color: #cd7f32; }
+        .finishers { text-align: center; margin-bottom: 20px; font-weight: bold; }
+        .total-time { font-weight: bold; color: #dc3545; }
+    </style>
+</head>
+<body>
+    <h2>🏆 比赛实时排名榜单</h2>
+    <h3>梅州市第三人民医院登山比赛</h3>
+
+    <div class="finishers">
+        已完成人数：{{ total_finishers }} 人
+        <br>
+        <button onclick="window.location.reload();">刷新排名</button>
+    </div>
+
+    {% if error %}
+        <p style="color: red; text-align: center;">{{ error }}</p>
+    {% elif ranking %}
+        <table>
+            <thead>
+                <tr>
+                    <th>排名</th>
+                    <th>姓名</th>
+                    <th>部门/科室</th>
+                    <th>工号</th>
+                    <th>总用时 (排名依据)</th>
+                    <th>第一段用时 (Start-Mid)</th>
+                    <th>第二段用时 (Mid-Finish)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in ranking %}
+                    <tr class="{% if item.rank == 1 %}gold{% elif item.rank == 2 %}silver{% elif item.rank == 3 %}bronze{% endif %} podium">
+                        <td>{{ item.rank }}</td>
+                        <td>{{ item.name }}</td>
+                        <td>{{ item.department }}</td>
+                        <td>{{ item.athlete_id }}</td>
+                        <td class="total-time">{{ item['Total Time'] }}</td>
+                        <td>{{ item['Segment 1'] }}</td>
+                        <td>{{ item['Segment 2'] }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p style="text-align: center;">比赛尚未开始或无有效完赛记录。</p>
+    {% endif %}
+
+</body>
+</html>
