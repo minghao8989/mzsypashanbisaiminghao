@@ -230,7 +230,7 @@ def display_registration_form(config):
                     请前往 **计时扫码** 页面使用此信息签到。
                 """)
 
-                # 清空输入框以准备下一次报名
+                # 【BUG 修复】只清空当前表单中使用的 Session State 键
                 st.session_state.department_reg = ''
                 st.session_state.name_reg = ''
                 st.session_state.gender_reg = '男'
@@ -262,7 +262,6 @@ def display_timing_scanner(config):
     st.info("选手请使用 **姓名** 作为账号，**手机号** 作为密码进行签到。")
 
     with st.form("timing_form", clear_on_submit=True):
-        # 此时的 athlete_username 是选手的姓名
         athlete_username = st.text_input("账号 (姓名)", key="scan_username").strip()
         athlete_password = st.text_input("密码 (手机号)", type="password", key="scan_password").strip()
         
@@ -540,17 +539,16 @@ def display_admin_data_management(config):
                 num_rows="dynamic",
                 column_config={
                     "athlete_id": st.column_config.Column("选手编号", help="必须唯一且不能重复", disabled=False),
-                    "username": st.column_config.Column("账号(姓名)", help="自动生成，请勿重复", disabled=True),
+                    "username": st.column_config.Column("账号(姓名)", help="由姓名自动生成", disabled=True),
                 },
                 key="edit_athletes_data",
                 use_container_width=True
             )
 
             if st.button("💾 确认修改并保存选手数据"):
-                # 获取原密码和原账号，合并编辑后的数据
                 original_df = load_athletes_data()
                 
-                # 确保编辑后的数据结构和原数据结构匹配（尤其是 password）
+                # 合并编辑后的数据，使用 right join 以保留所有编辑行
                 merged_df = original_df[['athlete_id', 'password', 'username']].merge(
                     edited_df_display, 
                     on='athlete_id', 
@@ -558,9 +556,9 @@ def display_admin_data_management(config):
                     suffixes=('_orig', '')
                 )
                 
-                # 重新计算 username 和 password
-                merged_df['username'] = merged_df['name'] # 姓名作为账号
-                merged_df['password'] = merged_df['phone'] # 手机号作为密码
+                # 重新计算 username 和 password (确保修改姓名和手机号后账号密码同步更新)
+                merged_df['username'] = merged_df['name'] 
+                merged_df['password'] = merged_df['phone']
                 
                 try:
                     merged_df['athlete_id'] = merged_df['athlete_id'].astype(str).str.strip()
@@ -768,7 +766,7 @@ def display_archive_reset():
 # --- 10. 页面函数：用户登录与登出 ---
 
 def set_login_success(config):
-    """仅设置登录状态，不进行页面跳转和 rerun"""
+    """【修复后的回调函数】仅设置登录状态，不进行页面跳转和 rerun"""
     username = st.session_state.login_username_input.strip().lower()
     password = st.session_state.login_password_input
     
@@ -791,6 +789,7 @@ def display_login_page(config):
         username = st.text_input("用户名", key="login_username_input")
         password = st.text_input("密码", type="password", key="login_password_input")
         
+        # 触发 set_login_success，更新 session state
         submitted = st.form_submit_button("登录", on_click=lambda: set_login_success(config))
         
         if submitted:
@@ -801,6 +800,7 @@ def display_login_page(config):
         if st.session_state.logged_in:
             st.success("登录成功！正在进入功能页面...")
             
+            # 根据角色设置 page_selection
             role = st.session_state.user_role
             if role in ["SuperAdmin", "Referee"]:
                 st.session_state.page_selection = "计时扫码"
