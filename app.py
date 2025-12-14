@@ -33,7 +33,7 @@ DEFAULT_CONFIG = {
     "registration_title": "梅州市第三人民医院选手资料登记",
     # 默认用户配置
     "users": {
-        "admin": {"password": "123", "role": "SuperAdmin"},
+        "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
         "referee01": {"password": "referee_pass", "role": "Referee"}
     }
@@ -48,7 +48,7 @@ def load_config():
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
-            # 确保加载的配置包含所有默认字段 (尤其是新的 'users')
+            # 合并用户配置，确保默认用户仍在
             return {**DEFAULT_CONFIG, **config, 'users': {**DEFAULT_CONFIG['users'], **config.get('users', {})}}
     except Exception:
         save_config(DEFAULT_CONFIG)
@@ -218,7 +218,6 @@ def display_timing_scanner(config):
         st.error("您没有权限访问计时扫码终端。")
         return
 
-    # 确保在 session_state 中有 scan_athlete_id
     if 'scan_athlete_id_input' not in st.session_state:
         st.session_state.scan_athlete_id_input = ""
         
@@ -331,14 +330,12 @@ def display_results_ranking():
 
 # --- 8. 页面函数：管理员数据管理 (Referee/SuperAdmin Access) ---
 
-# 配置标题保存回调函数
 def save_config_callback():
     """将表单数据保存到 config.json 文件"""
     new_config = {
         "system_title": st.session_state.new_sys_title,
         "registration_title": st.session_state.new_reg_title
     }
-    # 保持用户的配置不变
     current_config = load_config()
     current_config.update(new_config)
     save_config(current_config)
@@ -352,23 +349,86 @@ def display_user_management(config):
 
     st.subheader("👥 用户和权限管理")
     
-    # 1. 显示现有用户
-    st.markdown("##### 现有系统用户")
+    # 密码显示切换开关
+    show_passwords = st.checkbox("🔑 显示所有用户密码", key="show_passwords_toggle")
     
-    user_data = []
+    # 1. 显示现有用户（集成密码更改功能）
+    st.markdown("##### 现有系统用户列表 (可直接修改密码和角色)")
+    
+    user_list = []
     for user, data in config['users'].items():
-        user_data.append({
+        user_list.append({
             "用户名": user,
             "角色": data['role'],
-            "密码 (隐藏)": "********"
+            # 只有勾选了显示密码，才显示实际密码，否则显示星号
+            "密码": data['password'] if show_passwords else "********"
         })
         
-    df_users = pd.DataFrame(user_data)
-    st.dataframe(df_users, hide_index=True)
+    df_users = pd.DataFrame(user_list)
     
-    # 2. 添加/修改用户
+    # 使用 data_editor 实现密码和角色的直接修改
+    edited_df = st.data_editor(
+        df_users,
+        key="edit_users_data",
+        num_rows="disabled",
+        column_config={
+            "用户名": st.column_config.Column("用户名", disabled=True), # 用户名不允许修改
+            "角色": st.column_config.SelectboxColumn(
+                "角色", options=["SuperAdmin", "Leader", "Referee"]
+            ),
+            "密码": st.column_config.Column(
+                "密码",
+                help="点击单元格可直接修改密码。请勿使用空密码。",
+                # 当密码隐藏时，禁止在表格中直接修改，需先显示密码
+                disabled=not show_passwords 
+            )
+        },
+        use_container_width=True
+    )
+    
+    # 2. 保存修改
+    if st.button("💾 确认修改并保存用户数据"):
+        try:
+            new_users_config = {}
+            # 遍历编辑后的DataFrame，检查数据并更新配置
+            for _, row in edited_df.iterrows():
+                username = row['用户名']
+                new_password = row['密码']
+                new_role = row['角色']
+                
+                # 如果密码被隐藏且没有修改 ('********' 或禁用修改)，则保留原密码
+                if new_password == "********":
+                    if username in config['users']:
+                         new_password = config['users'][username]['password']
+                    else:
+                        st.error(f"用户 {username} 配置错误，无法获取原始密码。")
+                        return
+
+                if not new_password:
+                    st.error(f"用户 {username} 的密码不能为空，请修正！")
+                    return
+                
+                new_users_config[username] = {"password": new_password, "role": new_role}
+
+            # 检查是否有 SuperAdmin 权限被错误移除
+            if not any(data['role'] == 'SuperAdmin' for data in new_users_config.values()):
+                st.error("保存失败：系统中必须至少保留一个 'SuperAdmin' 角色！")
+                return
+
+            # 更新整个配置文件的用户部分
+            config['users'] = new_users_config
+            save_config(config)
+            st.success("✅ 用户资料修改已成功保存！")
+            time.sleep(1)
+            st.experimental_rerun()
+            
+        except Exception as e:
+            st.error(f"保存失败：{e}")
+            
     st.markdown("---")
-    st.markdown("##### 添加/更新/删除用户")
+
+    # 3. 添加/删除用户
+    st.markdown("##### 添加/删除用户")
 
     user_action = st.radio("操作", ["添加/更新", "删除用户"], key="user_action")
 
@@ -383,8 +443,6 @@ def display_user_management(config):
             if submitted:
                 if not new_username or not new_password:
                     st.error("用户名和密码不能为空。")
-                elif new_username == st.session_state.username:
-                    st.warning("您不能在此处修改自己的角色或密码。请直接在下方数据编辑区修改。")
                 else:
                     config['users'][new_username] = {"password": new_password, "role": new_role}
                     save_config(config)
@@ -392,18 +450,22 @@ def display_user_management(config):
                     st.experimental_rerun()
     
     elif user_action == "删除用户":
-        user_to_delete = st.selectbox("选择要删除的用户", options=list(config['users'].keys()), key="user_to_delete")
+        # 排除当前登录用户
+        deletable_users = [u for u in config['users'].keys() if u != st.session_state.username]
+        
+        if not deletable_users:
+            st.warning("系统中没有其他用户可供删除。")
+            return
+            
+        user_to_delete = st.selectbox("选择要删除的用户", options=deletable_users, key="user_to_delete")
         
         if st.button(f"🔴 确认删除用户 {user_to_delete}", type="secondary"):
-            if user_to_delete == st.session_state.username:
-                st.error("不能删除当前登录的用户！")
-            else:
+            if user_to_delete in config['users']:
                 del config['users'][user_to_delete]
                 save_config(config)
                 st.success(f"用户 **{user_to_delete}** 已成功删除。")
                 st.experimental_rerun()
-
-
+                
 def display_admin_data_management(config):
     """管理员数据查看和编辑页面"""
     
