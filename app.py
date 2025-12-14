@@ -166,12 +166,11 @@ def display_registration_form(config):
     if not st.session_state.logged_in or check_permission(["SuperAdmin", "Referee"]):
         st.info("请准确填写以下信息。**您的姓名为账号，手机号为密码。**")
         
-        if 'department_reg' not in st.session_state: st.session_state.department_reg = ''
-        if 'name_reg' not in st.session_state: st.session_state.name_reg = ''
-        if 'gender_reg' not in st.session_state: st.session_state.gender_reg = '男'
-        if 'phone_reg' not in st.session_state: st.session_state.phone_reg = ''
+        # 移除 Session State 默认值设置，依赖 clear_on_submit
         
-        with st.form("registration_form"):
+        # 【核心修复】使用 clear_on_submit=True 自动清理表单输入
+        with st.form("registration_form", clear_on_submit=True):
+            # 注意：使用 st.form 内部的 key，提交后会自动清理
             department = st.text_input("单位/部门", key="department_reg").strip()
             name = st.text_input("姓名 (将作为登录账号)", key="name_reg").strip()
             gender = st.selectbox("性别", ["男", "女", "其他"], key="gender_reg")
@@ -205,7 +204,7 @@ def display_registration_form(config):
                 
                 new_id_str = str(new_id)
                 
-                # --- 核心修改：生成账号和密码 ---
+                # --- 生成账号和密码 ---
                 new_username = name
                 new_password = phone # 手机号作为密码
 
@@ -229,12 +228,9 @@ def display_registration_form(config):
                     - 计时密码 (手机号)：**{new_password}**
                     请前往 **计时扫码** 页面使用此信息签到。
                 """)
-
-                # 【BUG 修复】只清空当前表单中使用的 Session State 键
-                st.session_state.department_reg = ''
-                st.session_state.name_reg = ''
-                st.session_state.gender_reg = '男'
-                st.session_state.phone_reg = ''
+                
+                # 提交成功后，clear_on_submit=True 会自动清空字段
+                # 移除手动清空 Session State 的代码，避免冲突。
                 st.experimental_rerun()
     else:
         st.error("您没有权限进行选手登记操作。")
@@ -244,7 +240,7 @@ def display_registration_form(config):
 
 def display_timing_scanner(config):
     """
-    【修改】计时扫码页面改为使用选手的账号(姓名)和密码(手机号)进行签到验证。
+    计时扫码页面改为使用选手的账号(姓名)和密码(手机号)进行签到验证。
     """
     
     if not check_permission(["SuperAdmin", "Referee"]):
@@ -530,7 +526,7 @@ def display_admin_data_management(config):
             st.subheader("📝 选手资料编辑")
             df_athletes = load_athletes_data()
             
-            # 筛选只显示与计时相关的主要列，并隐藏密码字段
+            # 筛选只显示与计时相关的主要列
             display_cols = ['athlete_id', 'department', 'name', 'gender', 'phone', 'username']
             df_display = df_athletes[display_cols].copy()
             
