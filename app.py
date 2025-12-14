@@ -3,126 +3,64 @@ import pandas as pd
 import os
 from datetime import datetime
 import time 
-import json 
-import hashlib 
 
 # --- 1. 配置和数据文件定义 & 安全设置 ---
 
 # 定义数据文件名
 ATHLETES_FILE = 'athletes.csv'
 RECORDS_FILE = 'timing_records.csv'
-CONFIG_FILE = 'config.json' 
-USERS_FILE = 'users.json' 
 
+# 【重要安全设置】管理员密码
+# ⚠️ 请务必将这里的默认密码替换成你自己的安全密码！
+ADMIN_PASSWORD = "123" 
 LOGIN_PAGE = "管理员登录"
-# 定义角色
-ROLES = {
-    'admin': '主席 (最高权限/领导)',
-    'referee': '裁判 (计时/数据修改)',
-}
 
-# 初始化 Session State 
+# 初始化 Session State 以跟踪登录状态和页面选择
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'page_selection' not in st.session_state:
     st.session_state.page_selection = "选手登记"
-if 'role' not in st.session_state:
-    st.session_state.role = None 
-if '_pending_page' not in st.session_state: # 新增：用于安全跳转标记
-    st.session_state._pending_page = None 
-if '_config_updated' not in st.session_state: # 新增：用于配置更新标记
-    st.session_state._config_updated = False 
 
 
-# --- 2. 辅助函数：用户和配置文件的加载与保存 ---
+# --- 2. 辅助函数：文件加载与保存 (保持一致) ---
 
-# 密码哈希函数
-def hash_password(password):
-    """使用 SHA-256 哈希密码"""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-# 默认用户数据 (根据用户需求配置)
-DEFAULT_USERS = {
-    # 最高权限用户：liudianyong, 密码 123456
-    "liudianyong": {"password_hash": hash_password("123456"), "role": "admin"},
-    # 默认裁判用户
-    "referee": {"password_hash": hash_password("referee123"), "role": "referee"}
-}
-
-def load_users():
-    """加载用户数据"""
-    if not os.path.exists(USERS_FILE) or os.path.getsize(USERS_FILE) == 0:
-        save_users(DEFAULT_USERS)
-        return DEFAULT_USERS
-    try:
-        with open(USERS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        # 如果文件存在但读取失败，可能是损坏，也尝试重置
-        save_users(DEFAULT_USERS)
-        return DEFAULT_USERS
-
-def save_users(users_data):
-    """保存用户数据"""
-    with open(USERS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(users_data, f, ensure_ascii=False, indent=4)
-
-
-DEFAULT_CONFIG = {
-    "system_title": "梅州市第三人民医院赛事管理系统",
-    "registration_title": "梅州市第三人民医院选手资料登记"
-}
-
-def load_config():
-    """加载配置数据，如果文件不存在或出错，则创建默认配置"""
-    if not os.path.exists(CONFIG_FILE) or os.path.getsize(CONFIG_FILE) == 0:
-        save_config(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG
-    
-    try:
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-            return {**DEFAULT_CONFIG, **config} 
-    except Exception:
-        save_config(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG
-
-def save_config(config_data):
-    """保存配置数据到 JSON 文件"""
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(config_data, f, ensure_ascii=False, indent=4)
-
-# 其他数据加载/保存函数 (athletes, records) 保持不变
 def load_athletes_data():
+    """加载选手资料文件，如果不存在或为空，则创建包含表头的空文件"""
     if not os.path.exists(ATHLETES_FILE) or os.path.getsize(ATHLETES_FILE) == 0:
         df = pd.DataFrame(columns=['athlete_id', 'department', 'name', 'gender', 'phone'])
         df.to_csv(ATHLETES_FILE, index=False, encoding='utf-8-sig') 
         return df
+    
     try:
         return pd.read_csv(ATHLETES_FILE, dtype={'athlete_id': str})
     except Exception:
         return pd.DataFrame(columns=['athlete_id', 'department', 'name', 'gender', 'phone'])
 
+
 def load_records_data():
+    """加载计时记录文件，如果不存在或为空，则创建包含表头的空文件"""
     if not os.path.exists(RECORDS_FILE) or os.path.getsize(RECORDS_FILE) == 0:
         df = pd.DataFrame(columns=['athlete_id', 'checkpoint_type', 'timestamp'])
         df.to_csv(RECORDS_FILE, index=False, encoding='utf-8-sig')
         return df
+        
     try:
         return pd.read_csv(RECORDS_FILE, parse_dates=['timestamp'], dtype={'athlete_id': str})
     except Exception:
         return pd.DataFrame(columns=['athlete_id', 'checkpoint_type', 'timestamp'])
 
 def save_athlete_data(df):
+    """保存选手数据到 CSV (使用 utf-8-sig 编码防乱码)"""
     df.to_csv(ATHLETES_FILE, index=False, encoding='utf-8-sig')
 
 def save_records_data(df):
+    """保存计时数据到 CSV (使用 utf-8-sig 编码防乱码)"""
     df.to_csv(RECORDS_FILE, index=False, encoding='utf-8-sig')
 
-
 # --- 3. 核心计算与格式化函数 (保持一致) ---
+
 def calculate_net_time(df_records):
-    # ... (代码不变) ...
+    """根据扫码记录计算每位选手的总用时和分段用时。"""
     if df_records.empty:
         return pd.DataFrame()
 
@@ -145,7 +83,7 @@ def calculate_net_time(df_records):
 
 
 def format_time(seconds):
-    # ... (代码不变) ...
+    """格式化秒数到 MM:SS.mmm"""
     if pd.isna(seconds) or seconds is None:
         return 'N/A'
     minutes = int(seconds // 60)
@@ -154,10 +92,11 @@ def format_time(seconds):
 
 
 # --- 4. 页面函数：选手登记 (Public Access) ---
-def display_registration_form(config):
-    # ... (代码不变) ...
-    st.header(f"👤 {config['registration_title']}") 
-    st.info("请准确填写以下信息，并记住由系统生成的比赛编号。")
+
+def display_registration_form():
+    """选手资料登记页面"""
+    st.header("👤 选手资料登记")
+    st.info("请准确填写以下信息，并记住系统生成的比赛编号。")
 
     with st.form("registration_form"):
         department = st.text_input("单位/部门", key="department").strip()
@@ -205,16 +144,18 @@ def display_registration_form(config):
             st.session_state.phone = ''
 
 
-# --- 5. 页面函数：计时扫码 (Referee/Admin Access) ---
-def display_timing_scanner(config):
-    # ... (代码不变) ...
+# --- 5. 页面函数：计时扫码 (Private Access) ---
+
+def display_timing_scanner():
+    """计时扫码页面"""
+    
     checkpoint_type = st.sidebar.selectbox(
         "选择检查点类型", 
         ['START (起点)', 'MID (中途)', 'FINISH (终点)'],
         key='checkpoint_select'
     ).split(' ')[0].upper()
 
-    st.header(f"⏱️ {config['system_title'].replace('赛事管理系统', '').strip()} {checkpoint_type} 计时终端") 
+    st.header(f"⏱️ {checkpoint_type} 计时终端")
     st.subheader(f"当前检查点: {checkpoint_type}")
     st.info("请在此处输入选手的比赛编号进行计时。")
 
@@ -245,12 +186,12 @@ def display_timing_scanner(config):
 
             current_time = datetime.now()
             
-            new_record = pd.DataFrame([{
+            new_record = pd.DataFrame({
                 'athlete_id': [athlete_id], 
                 'checkpoint_type': [checkpoint_type], 
                 'timestamp': [current_time]
-            }])
-
+            })
+            
             df_records = pd.concat([df_records, new_record], ignore_index=True)
             save_records_data(df_records)
 
@@ -262,9 +203,10 @@ def display_timing_scanner(config):
             st.session_state.scan_athlete_id = ""
 
 
-# --- 6. 页面函数：排名结果 (Admin Access) ---
+# --- 6. 页面函数：排名结果 (Private Access) ---
+
 def display_results_ranking():
-    # ... (代码不变) ...
+    """结果统计与排名页面"""
     st.header("🏆 比赛成绩与排名")
 
     df_records = load_records_data()
@@ -306,207 +248,86 @@ def display_results_ranking():
         mime="text/csv"
     )
 
-# --- 7. 页面函数：管理员数据管理 (Referee/Admin Access) ---
+# --- 7. 页面函数：管理员数据管理 (Private Access) ---
 
-# 配置保存回调函数 (修复 config 提交冲突)
-def save_config_callback():
-    new_config = {
-        "system_title": st.session_state.new_sys_title,
-        "registration_title": st.session_state.new_reg_title
-    }
-    save_config(new_config)
-    st.session_state._config_updated = True # 标记配置已更新
-
-def display_admin_data_management(config):
+def display_admin_data_management():
     """管理员数据查看和编辑页面"""
-    st.header("🔑 数据管理 (权限: {})".format(ROLES.get(st.session_state.role, '未知')))
+    st.header("🔑 数据管理 (管理员权限)")
+    st.warning("在此处修改数据需谨慎，任何更改都将直接保存到 CSV 文件中！")
     
-    # 检查是否有待处理的配置更新标记
-    if st.session_state._config_updated:
-        st.success("配置已保存！系统正在重新加载以应用新标题...")
-        st.session_state._config_updated = False # 清除标记
-        time.sleep(1) 
-        st.experimental_rerun() # 强制重跑以加载新配置
-
-    # 根据权限调整选项
-    data_options = ["数据表 (选手/记录)"]
-    if st.session_state.role == 'admin':
-        data_options.append("系统配置 (标题/用户)")
-
     data_select = st.sidebar.radio(
-        "选择要管理的项目", 
-        data_options
+        "选择要管理的数据表", 
+        ["选手资料 (athletes)", "计时记录 (records)"]
     )
 
-    if data_select == "数据表 (选手/记录)":
-        st.warning("在此处修改数据需谨慎，任何更改都将直接保存到 CSV 文件中！")
-        data_table_select = st.radio(
-            "选择要管理的数据表", 
-            ["选手资料 (athletes)", "计时记录 (records)"]
+    if data_select == "选手资料 (athletes)":
+        st.subheader("📝 选手资料编辑")
+        df_athletes = load_athletes_data()
+        
+        edited_df = st.data_editor(
+            df_athletes,
+            num_rows="dynamic",
+            column_config={
+                "athlete_id": st.column_config.Column("选手编号", help="必须唯一且不能重复", disabled=False),
+            },
+            key="edit_athletes_data",
+            use_container_width=True
+        )
+
+        if st.button("💾 确认修改并保存选手数据"):
+            try:
+                if edited_df['athlete_id'].duplicated().any():
+                    st.error("保存失败：'athlete_id' 列中存在重复编号！请修正后保存。")
+                elif edited_df['athlete_id'].astype(str).str.contains(r'[^\d]').any():
+                    st.error("保存失败：'athlete_id' 必须是纯数字编号。")
+                else:
+                    edited_df['athlete_id'] = edited_df['athlete_id'].astype(str) 
+                    save_athlete_data(edited_df)
+                    st.success("✅ 选手资料修改已成功保存！")
+                    time.sleep(1)
+                    st.experimental_rerun() 
+            except Exception as e:
+                st.error(f"保存失败：{e}")
+
+
+    elif data_select == "计时记录 (records)":
+        st.subheader("⏱️ 计时记录编辑")
+        df_records = load_records_data()
+        
+        st.info("提示：请谨慎修改时间戳。格式应为 YYYY-MM-DD HH:MM:SS.SSSSSS")
+        
+        edited_df = st.data_editor(
+            df_records,
+            num_rows="dynamic",
+            column_config={
+                "checkpoint_type": st.column_config.Column("检查点类型", help="必须是 START, MID, FINISH 之一"),
+            },
+            key="edit_records_data",
+            use_container_width=True
         )
         
-        if data_table_select == "选手资料 (athletes)":
-            st.subheader("📝 选手资料编辑")
-            df_athletes = load_athletes_data()
-            
-            edited_df = st.data_editor(df_athletes, num_rows="dynamic",
-                column_config={"athlete_id": st.column_config.Column("选手编号", help="必须唯一且不能重复", disabled=False)},
-                key="edit_athletes_data", use_container_width=True)
-
-            if st.button("💾 确认修改并保存选手数据"):
-                try:
-                    if edited_df['athlete_id'].duplicated().any():
-                        st.error("保存失败：'athlete_id' 列中存在重复编号！请修正后保存。")
-                    elif edited_df['athlete_id'].astype(str).str.contains(r'[^\d]').any():
-                        st.error("保存失败：'athlete_id' 必须是纯数字编号。")
-                    else:
-                        edited_df['athlete_id'] = edited_df['athlete_id'].astype(str) 
-                        save_athlete_data(edited_df)
-                        st.success("✅ 选手资料修改已成功保存！")
-                        time.sleep(1)
-                        st.experimental_rerun() 
-                except Exception as e:
-                    st.error(f"保存失败：{e}")
-
-        elif data_table_select == "计时记录 (records)":
-            st.subheader("⏱️ 计时记录编辑")
-            df_records = load_records_data()
-            
-            st.info("提示：请谨慎修改时间戳。格式应为 YYYY-MM-DD HH:MM:SS.SSSSSS")
-            
-            edited_df = st.data_editor(df_records, num_rows="dynamic",
-                column_config={"checkpoint_type": st.column_config.Column("检查点类型", help="必须是 START, MID, FINISH 之一")},
-                key="edit_records_data", use_container_width=True)
-            
-            if st.button("💾 确认修改并保存计时记录"):
-                try:
-                    edited_df['timestamp'] = pd.to_datetime(edited_df['timestamp'], errors='raise')
+        if st.button("💾 确认修改并保存计时记录"):
+            try:
+                edited_df['timestamp'] = pd.to_datetime(edited_df['timestamp'], errors='raise')
+                
+                if not edited_df['checkpoint_type'].isin(['START', 'MID', 'FINISH']).all():
+                    st.error("保存失败：'checkpoint_type' 列包含无效值，必须是 START, MID, FINISH 之一。")
+                    return
                     
-                    if not edited_df['checkpoint_type'].isin(['START', 'MID', 'FINISH']).all():
-                        st.error("保存失败：'checkpoint_type' 列包含无效值，必须是 START, MID, FINISH 之一。")
-                        return
-                        
-                    save_records_data(edited_df)
-                    st.success("✅ 计时记录修改已成功保存！")
-                    time.sleep(1)
-                    st.experimental_rerun()
-                except ValueError:
-                    st.error("保存失败：'timestamp' 列的日期时间格式不正确，请确保格式正确。")
-                except Exception as e:
-                    st.error(f"保存失败：{e}")
-
-
-    # --- 系统配置修改和用户管理页面 (仅 Admin 可见) ---
-    elif data_select == "系统配置 (标题/用户)" and st.session_state.role == 'admin':
-        st.subheader("⚙️ 系统标题与配置管理")
-
-        # Tab 容器
-        config_tab, user_tab = st.tabs(["标题配置", "用户及权限管理"])
-
-        with config_tab:
-            st.info("修改以下配置项后，点击保存，系统将自动重新加载以应用新标题。")
-            with st.form("config_form"):
-                new_system_title = st.text_input(
-                    "系统主标题 (侧边栏顶部和计时页面)", 
-                    value=config['system_title'],
-                    key="new_sys_title"
-                )
-                new_reg_title = st.text_input(
-                    "选手登记页面标题", 
-                    value=config['registration_title'],
-                    key="new_reg_title"
-                )
-                if st.form_submit_button("✅ 保存并应用配置", on_click=save_config_callback):
-                    # 成功信息由主页面的 _config_updated 标记处理
-                    pass 
-
-        with user_tab:
-            display_user_management()
-
-
-# --- 7.1 新增：用户管理功能函数 (仅 Admin 可用) ---
-def display_user_management():
-    st.subheader("👥 用户账号与权限管理")
-    users_data = load_users()
-    
-    # 1. 现有用户列表和权限修改
-    st.markdown("##### 权限批量修改与添加")
-    df_users = pd.DataFrame([
-        {'用户名': k, '角色': v['role'], '权限描述': ROLES.get(v['role'])} 
-        for k, v in users_data.items()
-    ])
-    
-    # 创建可编辑的 DataFrame
-    edited_df = st.data_editor(
-        df_users,
-        num_rows="dynamic",
-        column_config={
-            "用户名": st.column_config.Column(disabled=False, help="新增用户时填写"),
-            "角色": st.column_config.SelectboxColumn(options=list(ROLES.keys())),
-            "权限描述": st.column_config.Column(disabled=True) # 描述不可编辑
-        },
-        key="edit_users_df",
-        use_container_width=True
-    )
-    
-    # 保存用户权限更改
-    if st.button("💾 保存用户权限更改", type="primary"):
-        new_users = {}
-        error_found = False
-        
-        # 将 DataFrame 转换回字典格式，并保留原有密码
-        for index, row in edited_df.iterrows():
-            username = row['用户名']
-            role = row['角色']
-            
-            if pd.notna(username) and username.strip() == "":
-                st.error("用户名不能为空。")
-                error_found = True
-                break
-
-            if username in users_data:
-                # 现有用户：保留原有密码哈希
-                new_users[username] = {"password_hash": users_data[username]['password_hash'], "role": role}
-            elif pd.notna(username):
-                # 新增用户：设置默认密码，只有在新的用户名时才添加
-                if username not in new_users:
-                    new_users[username] = {"password_hash": hash_password("123456"), "role": role}
-                    st.info(f"新增用户 **{username}** 的默认密码已设置为: **123456**。请提醒其登录后修改。")
-                else:
-                    st.warning(f"跳过重复添加的用户: {username}")
-        
-        if not error_found:
-            save_users(new_users)
-            st.success("用户权限更改已保存！")
-            time.sleep(1)
-            st.experimental_rerun()
-
-
-    st.markdown("---")
-    # 2. 修改密码功能
-    st.markdown("##### 🔑 修改用户密码")
-    with st.form("change_password_form"):
-        # 获取最新的用户列表
-        latest_users = load_users() 
-        target_user = st.selectbox("选择要修改密码的用户", options=list(latest_users.keys()), key="target_user_pwd")
-        new_password = st.text_input("输入新密码", type="password", key="new_password_input")
-        confirm_password = st.text_input("确认新密码", type="password", key="confirm_password_input")
-        
-        if st.form_submit_button("修改密码"):
-            if not new_password or new_password != confirm_password:
-                st.error("新密码不能为空或两次输入不一致。")
-            else:
-                users_data = load_users()
-                users_data[target_user]['password_hash'] = hash_password(new_password)
-                save_users(users_data)
-                st.success(f"用户 **{target_user}** 的密码已成功修改！")
+                save_records_data(edited_df)
+                st.success("✅ 计时记录修改已成功保存！")
                 time.sleep(1)
                 st.experimental_rerun()
+            except ValueError:
+                st.error("保存失败：'timestamp' 列的日期时间格式不正确，请确保格式正确。")
+            except Exception as e:
+                st.error(f"保存失败：{e}")
 
 
-# --- 8. 页面函数：归档与重置 (Admin Access) ---
+# --- 8. 页面函数：归档与重置 (Private Access) ---
+
 def archive_and_reset_race_data():
-    # ... (代码不变) ...
+    """将当前数据归档，并清空活动文件以便开始新的比赛。"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     if os.path.exists(ATHLETES_FILE) and os.path.getsize(ATHLETES_FILE) > 0:
@@ -523,7 +344,7 @@ def archive_and_reset_race_data():
     return True
 
 def get_archived_files():
-    # ... (代码不变) ...
+    """查找所有已归档的历史数据文件。"""
     files = os.listdir('.')
     archived = [f for f in files if f.startswith('ARCHIVE_')]
     athletes_archives = sorted([f for f in archived if f.startswith('ARCHIVE_ATHLETES_')], reverse=True)
@@ -531,7 +352,7 @@ def get_archived_files():
 
 
 def display_archive_reset():
-    # ... (代码不变) ...
+    """比赛数据归档与重置页面"""
     st.header("🗄️ 比赛归档与重置 (重要操作)")
     
     st.subheader("⚠️ 1. 结束当前比赛并归档数据")
@@ -604,122 +425,89 @@ def display_archive_reset():
         st.error(f"加载历史数据时发生错误：{e}")
 
 
-# --- 10. 页面函数：管理员登录 (修复 Login 冲突) ---
+# --- 9. 页面函数：管理员登录 (修复后的跳转逻辑) ---
 
-def set_login_success_with_role():
-    """登录成功后设置状态和角色"""
-    users = load_users()
-    username = st.session_state.login_username_input
-    password = st.session_state.login_password_input
-    
-    if username in users and users[username]['password_hash'] == hash_password(password):
+# 定义登录成功后的回调函数
+def set_login_success():
+    """登录成功后设置状态并跳转页面"""
+    # 仅在密码正确时执行以下操作
+    if st.session_state.login_password_input == ADMIN_PASSWORD:
         st.session_state.logged_in = True
-        st.session_state.role = users[username]['role'] 
-        st.session_state._pending_page = "计时扫码" # 使用标记进行安全跳转
-    else:
-        # 错误信息处理已在 display_login_page 中完成
-        pass
+        # 强制将页面导航状态设置为一个后台页面，实现“跳转”
+        st.session_state.page_selection = "计时扫码" 
 
 def display_login_page():
     """管理员登录页面"""
     st.header("🔑 管理员登录")
-    st.info("请输入用户名和密码以访问后台管理功能。")
+    st.info("请输入管理员密码以访问后台管理功能。")
     
     with st.form("login_form"):
-        username = st.text_input("用户名", key="login_username_input")
+        # 将密码输入框设置为 key，以便在回调函数中访问其值
         password = st.text_input("密码", type="password", key="login_password_input")
         
+        # 将跳转逻辑绑定到回调函数 on_click
         submitted = st.form_submit_button(
             "登录",
-            on_click=set_login_success_with_role # 使用回调函数
+            on_click=set_login_success # 点击时，调用 set_login_success
         )
         
         if submitted:
-            users = load_users()
-            username = st.session_state.login_username_input
-            password = st.session_state.login_password_input
-            
-            # 只有在回调函数未成功（即用户名或密码错误）时才显示错误
-            if not (username in users and users[username]['password_hash'] == hash_password(password)):
-                st.error("用户名或密码错误，请重试。")
-                st.session_state.login_password_input = "" 
+            # 只有密码错误时才显示错误信息，成功逻辑交给 on_click
+            if st.session_state.login_password_input != ADMIN_PASSWORD:
+                st.error("密码错误，请重试。")
             else:
+                # 成功时，显示成功信息并短暂延时（on_click已设置跳转状态）
                 st.success("登录成功！正在进入后台管理页面...")
-                time.sleep(1)
+                time.sleep(1) 
 
 
 def display_logout_button():
     """退出登录按钮"""
     def set_logout():
         st.session_state.logged_in = False
-        st.session_state.role = None
-        st.session_state.page_selection = "选手登记"
+        st.session_state.page_selection = "选手登记" # 退出后返回公共页面
         
     if st.sidebar.button("退出登录", on_click=set_logout):
+        # 退出后强制重跑，因为回调函数不会自动触发 rerun
         st.experimental_rerun()
 
 
-# --- 11. Streamlit 主应用入口 (包含安全跳转逻辑) ---
+# --- 10. Streamlit 主应用入口 ---
 
 def main_app():
-    # 1. 检查并应用待处理的页面跳转标记
-    if st.session_state._pending_page:
-        st.session_state.page_selection = st.session_state._pending_page
-        st.session_state._pending_page = None # 清除标记
-        st.experimental_rerun() # 强制安全跳转
-
-    # 2. 检查并应用待处理的配置更新标记
-    # 这个检查必须在加载 config 之后，但在设置 sidebar 之前
-    if st.session_state._config_updated:
-        # 此时配置已保存，应用已重新加载，但需要再次重跑以刷新浏览器标签页标题
-        st.session_state._config_updated = False # 清除标记
-        st.experimental_rerun() 
-        
-
-    # 3. 初始化文件，加载配置和数据
-    load_users() 
-    config = load_config()
     load_athletes_data()
     load_records_data()
     
-    st.sidebar.title(f"🏁 {config['system_title']}")
+    st.sidebar.title("🏁 赛事管理系统")
     
-    # 4. 根据角色定义用户可见的页面列表
+    # 1. 定义导航列表
     if st.session_state.logged_in:
+        pages = ["选手登记", "计时扫码", "排名结果", "数据管理（管理员）", "归档与重置"]
         display_logout_button()
-        
-        pages = ["选手登记", "计时扫码", "数据管理（管理员）"]
-        
-        # 权限控制：Admin (主席/领导) 可见排名和归档
-        if st.session_state.role == 'admin':
-            pages.append("排名结果") 
-            pages.append("归档与重置")
-            
-        st.sidebar.markdown(f"**当前用户: {st.session_state.role} ({ROLES.get(st.session_state.role)})**")
-        
     else:
         pages = ["选手登记", LOGIN_PAGE]
 
-    # 5. 确保当前的页面选择在可用列表中
+    # 2. 确保当前的页面选择在可用列表中
     if st.session_state.page_selection not in pages:
+        # 如果当前页面（比如计时扫码）在退出后不再可用，则默认跳转到第一个可用页面
         st.session_state.page_selection = pages[0]
     
-    # 6. 导航栏
+    # 3. 导航栏：使用 key='page_selection' 来管理当前选中的页面
     page = st.sidebar.radio("选择功能模块", pages, 
                             index=pages.index(st.session_state.page_selection), 
                             key='page_selection') 
 
-    # 7. 路由
+    # 4. 路由
     if page == "选手登记":
-        display_registration_form(config)
+        display_registration_form()
     elif page == LOGIN_PAGE:
         display_login_page()
     elif page == "计时扫码":
-        display_timing_scanner(config)
+        display_timing_scanner()
     elif page == "排名结果":
         display_results_ranking()
     elif page == "数据管理（管理员）":
-        display_admin_data_management(config)
+        display_admin_data_management()
     elif page == "归档与重置":
         display_archive_reset()
     
@@ -728,18 +516,11 @@ def main_app():
 
 
 if __name__ == '__main__':
-    # 重要的初始化步骤
-    # 确保所有文件在 Streamlit 启动前都已初始化，解决登录失败问题
-    load_users()
-    load_config()
-    load_athletes_data()
-    load_records_data()
-    
-    initial_config = load_config() 
-    
     st.set_page_config(
-        page_title=initial_config['system_title'], 
+        page_title="山地赛计时终端",
         page_icon="🏃",
         layout="wide"
     )
     main_app()
+
+
