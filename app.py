@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 import time 
 import json 
-import hashlib # 用于密码安全哈希
+import hashlib 
 
 # --- 1. 配置和数据文件定义 & 安全设置 ---
 
@@ -12,14 +12,13 @@ import hashlib # 用于密码安全哈希
 ATHLETES_FILE = 'athletes.csv'
 RECORDS_FILE = 'timing_records.csv'
 CONFIG_FILE = 'config.json' 
-USERS_FILE = 'users.json' # 新增用户数据库文件
+USERS_FILE = 'users.json' 
 
 LOGIN_PAGE = "管理员登录"
 # 定义角色
 ROLES = {
-    'admin': '主席 (最高权限)',
+    'admin': '主席 (最高权限/领导)',
     'referee': '裁判 (计时/数据修改)',
-    # 更多角色可以在这里添加
 }
 
 # 初始化 Session State 
@@ -28,7 +27,7 @@ if 'logged_in' not in st.session_state:
 if 'page_selection' not in st.session_state:
     st.session_state.page_selection = "选手登记"
 if 'role' not in st.session_state:
-    st.session_state.role = None # 存储当前用户的角色
+    st.session_state.role = None 
 
 # --- 2. 辅助函数：用户和配置文件的加载与保存 ---
 
@@ -37,9 +36,11 @@ def hash_password(password):
     """使用 SHA-256 哈希密码"""
     return hashlib.sha256(password.encode()).hexdigest()
 
-# 默认用户数据
+# 默认用户数据 (根据用户需求配置)
 DEFAULT_USERS = {
-    "admin": {"password_hash": hash_password("admin123"), "role": "admin"},
+    # 最高权限用户：liudianyong, 密码 123456
+    "liudianyong": {"password_hash": hash_password("123456"), "role": "admin"},
+    # 默认裁判用户
     "referee": {"password_hash": hash_password("referee123"), "role": "referee"}
 }
 
@@ -256,7 +257,6 @@ def display_timing_scanner(config):
 
 
 # --- 6. 页面函数：排名结果 (Admin Access) ---
-# 只有 Admin 才能看到此页面
 def display_results_ranking():
     # ... (代码不变) ...
     st.header("🏆 比赛成绩与排名")
@@ -307,6 +307,7 @@ def save_config_callback():
         "registration_title": st.session_state.new_reg_title
     }
     save_config(new_config)
+    # 不调用 rerun，让 Streamlit 自动完成刷新周期
 
 def display_admin_data_management(config):
     """管理员数据查看和编辑页面"""
@@ -323,14 +324,12 @@ def display_admin_data_management(config):
     )
 
     if data_select == "数据表 (选手/记录)":
-        # ... (数据表编辑逻辑不变) ...
         st.warning("在此处修改数据需谨慎，任何更改都将直接保存到 CSV 文件中！")
         data_table_select = st.radio(
             "选择要管理的数据表", 
             ["选手资料 (athletes)", "计时记录 (records)"]
         )
         
-        # ... (选手资料编辑) ...
         if data_table_select == "选手资料 (athletes)":
             st.subheader("📝 选手资料编辑")
             df_athletes = load_athletes_data()
@@ -354,7 +353,6 @@ def display_admin_data_management(config):
                 except Exception as e:
                     st.error(f"保存失败：{e}")
 
-        # ... (计时记录编辑) ...
         elif data_table_select == "计时记录 (records)":
             st.subheader("⏱️ 计时记录编辑")
             df_records = load_records_data()
@@ -385,13 +383,13 @@ def display_admin_data_management(config):
 
     # --- 系统配置修改和用户管理页面 (仅 Admin 可见) ---
     elif data_select == "系统配置 (标题/用户)" and st.session_state.role == 'admin':
-        st.subheader("⚙️ 系统标题与配置修改")
-        st.info("修改以下配置项后，点击保存，系统将自动重新加载以应用新标题。")
+        st.subheader("⚙️ 系统标题与配置管理")
 
         # Tab 容器
         config_tab, user_tab = st.tabs(["标题配置", "用户及权限管理"])
 
         with config_tab:
+            st.info("修改以下配置项后，点击保存，系统将自动重新加载以应用新标题。")
             with st.form("config_form"):
                 new_system_title = st.text_input(
                     "系统主标题 (侧边栏顶部和计时页面)", 
@@ -416,28 +414,28 @@ def display_user_management():
     st.subheader("👥 用户账号与权限管理")
     users_data = load_users()
     
-    # 将用户数据转为 DataFrame 以便编辑 (排除密码哈希)
+    # 1. 现有用户列表和权限修改
+    st.markdown("##### 权限批量修改与添加")
     df_users = pd.DataFrame([
-        {'用户名': k, '角色': v['role']} 
+        {'用户名': k, '角色': v['role'], '权限描述': ROLES.get(v['role'])} 
         for k, v in users_data.items()
     ])
     
-    st.write("现有用户列表:")
+    # 创建可编辑的 DataFrame
     edited_df = st.data_editor(
         df_users,
         num_rows="dynamic",
         column_config={
-            "用户名": st.column_config.Column(disabled=True),
+            "用户名": st.column_config.Column(disabled=False, help="新增用户时填写"),
             "角色": st.column_config.SelectboxColumn(options=list(ROLES.keys())),
+            "权限描述": st.column_config.Column(disabled=True) # 描述不可编辑
         },
         key="edit_users_df",
         use_container_width=True
     )
     
-    # 账号管理操作
-    col1, col2, col3 = st.columns([1, 1, 1])
-
-    if col1.button("💾 保存用户权限更改", type="primary"):
+    # 保存用户权限更改
+    if st.button("💾 保存用户权限更改", type="primary"):
         new_users = {}
         error_found = False
         
@@ -446,19 +444,22 @@ def display_user_management():
             username = row['用户名']
             role = row['角色']
             
-            if username in users_data:
-                # 保留原有密码哈希
-                new_users[username] = {"password_hash": users_data[username]['password_hash'], "role": role}
-            elif pd.notna(username):
-                # 新增用户必须设置默认密码
-                new_users[username] = {"password_hash": hash_password("123456"), "role": role}
-                st.info(f"新增用户 {username} 的默认密码已设置为: 123456。请提醒其登录后修改。")
-            
-            if pd.notna(username) and not username:
+            if pd.notna(username) and username.strip() == "":
                 st.error("用户名不能为空。")
                 error_found = True
                 break
 
+            if username in users_data:
+                # 现有用户：保留原有密码哈希
+                new_users[username] = {"password_hash": users_data[username]['password_hash'], "role": role}
+            elif pd.notna(username):
+                # 新增用户：设置默认密码，只有在新的用户名时才添加
+                if username not in new_users:
+                    new_users[username] = {"password_hash": hash_password("123456"), "role": role}
+                    st.info(f"新增用户 **{username}** 的默认密码已设置为: **123456**。请提醒其登录后修改。")
+                else:
+                    st.warning(f"跳过重复添加的用户: {username}")
+        
         if not error_found:
             save_users(new_users)
             st.success("用户权限更改已保存！")
@@ -466,10 +467,13 @@ def display_user_management():
             st.experimental_rerun()
 
 
-    # 修改密码功能
-    st.subheader("🔑 修改用户密码")
+    st.markdown("---")
+    # 2. 修改密码功能
+    st.markdown("##### 🔑 修改用户密码")
     with st.form("change_password_form"):
-        target_user = st.selectbox("选择要修改密码的用户", options=list(load_users().keys()), key="target_user_pwd")
+        # 获取最新的用户列表
+        latest_users = load_users() 
+        target_user = st.selectbox("选择要修改密码的用户", options=list(latest_users.keys()), key="target_user_pwd")
         new_password = st.text_input("输入新密码", type="password", key="new_password_input")
         confirm_password = st.text_input("确认新密码", type="password", key="confirm_password_input")
         
@@ -480,7 +484,7 @@ def display_user_management():
                 users_data = load_users()
                 users_data[target_user]['password_hash'] = hash_password(new_password)
                 save_users(users_data)
-                st.success(f"用户 {target_user} 的密码已成功修改！")
+                st.success(f"用户 **{target_user}** 的密码已成功修改！")
                 time.sleep(1)
                 st.experimental_rerun()
 
@@ -585,7 +589,7 @@ def display_archive_reset():
         st.error(f"加载历史数据时发生错误：{e}")
 
 
-# --- 9. 页面函数：管理员登录 (使用用户数据库) ---
+# --- 10. 页面函数：管理员登录 (使用用户数据库) ---
 
 def set_login_success_with_role():
     """登录成功后设置状态和角色"""
@@ -598,8 +602,8 @@ def set_login_success_with_role():
         st.session_state.role = users[username]['role'] # 存储角色
         st.session_state.page_selection = "计时扫码" 
     else:
-        st.error("用户名或密码错误，请重试。")
-        st.session_state.login_password_input = "" # 清空密码输入框
+        # 错误信息处理已在 display_login_page 中完成
+        pass
 
 def display_login_page():
     """管理员登录页面"""
@@ -612,12 +616,21 @@ def display_login_page():
         
         submitted = st.form_submit_button(
             "登录",
-            on_click=set_login_success_with_role # 使用新的回调函数
+            on_click=set_login_success_with_role # 使用回调函数
         )
         
-        if submitted and st.session_state.logged_in:
-            st.success("登录成功！正在进入后台管理页面...")
-            time.sleep(1) 
+        if submitted:
+            users = load_users()
+            username = st.session_state.login_username_input
+            password = st.session_state.login_password_input
+            
+            # 只有在回调函数未成功（即用户名或密码错误）时才显示错误
+            if not (username in users and users[username]['password_hash'] == hash_password(password)):
+                st.error("用户名或密码错误，请重试。")
+                st.session_state.login_password_input = "" 
+            else:
+                st.success("登录成功！正在进入后台管理页面...")
+                time.sleep(1)
 
 
 def display_logout_button():
@@ -631,11 +644,11 @@ def display_logout_button():
         st.experimental_rerun()
 
 
-# --- 10. Streamlit 主应用入口 (根据角色控制导航) ---
+# --- 11. Streamlit 主应用入口 (根据角色控制导航) ---
 
 def main_app():
     # 1. 初始化文件，加载配置和数据
-    load_users() # 确保用户文件存在
+    load_users() 
     config = load_config()
     load_athletes_data()
     load_records_data()
@@ -649,12 +662,12 @@ def main_app():
         # 基础页面，所有已登录用户可见
         pages = ["选手登记", "计时扫码", "数据管理（管理员）"]
         
-        # 权限控制：Admin (主席) 可见排名和归档
+        # 权限控制：Admin (主席/领导) 可见排名和归档
         if st.session_state.role == 'admin':
             pages.append("排名结果") 
             pages.append("归档与重置")
             
-        st.sidebar.markdown(f"**当前用户: {st.session_state.role}**")
+        st.sidebar.markdown(f"**当前用户: {st.session_state.role} ({ROLES.get(st.session_state.role)})**")
         
     else:
         # 未登录用户：只看到公共页面和登录入口
@@ -676,15 +689,14 @@ def main_app():
         display_login_page()
     elif page == "计时扫码":
         display_timing_scanner(config)
-    elif page == "排名结果" and st.session_state.role == 'admin': # 仅 Admin 路由
+    elif page == "排名结果":
+        # 如果用户不是 Admin，即使 URL 强制访问，也会被阻止（在第 2 步 Pages 列表已控制）
         display_results_ranking()
     elif page == "数据管理（管理员）":
         display_admin_data_management(config)
-    elif page == "归档与重置" and st.session_state.role == 'admin': # 仅 Admin 路由
+    elif page == "归档与重置":
+        # 如果用户不是 Admin，即使 URL 强制访问，也会被阻止
         display_archive_reset()
-    elif page == "排名结果" or page == "归档与重置":
-        # 权限不足时显示提示
-        st.error("🔒 权限不足，请联系主席获取查看最终排名的权限。")
     
     st.sidebar.markdown("---")
     st.sidebar.info("数据下载和修改请前往 '数据管理' 模块。")
