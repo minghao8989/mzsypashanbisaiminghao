@@ -12,7 +12,7 @@ RECORDS_FILE = 'timing_records.csv'
 
 # 【重要安全设置】管理员密码
 # ⚠️ 请务必将这里的默认密码替换成你自己的安全密码！
-ADMIN_PASSWORD = "123" 
+ADMIN_PASSWORD = "your_secure_password_123" 
 LOGIN_PAGE = "管理员登录"
 
 # 初始化 Session State 以跟踪登录状态和页面选择
@@ -425,7 +425,16 @@ def display_archive_reset():
         st.error(f"加载历史数据时发生错误：{e}")
 
 
-# --- 9. 页面函数：管理员登录 (优化后的跳转逻辑) ---
+# --- 9. 页面函数：管理员登录 (修复后的跳转逻辑) ---
+
+# 定义登录成功后的回调函数
+def set_login_success():
+    """登录成功后设置状态并跳转页面"""
+    # 仅在密码正确时执行以下操作
+    if st.session_state.login_password_input == ADMIN_PASSWORD:
+        st.session_state.logged_in = True
+        # 强制将页面导航状态设置为一个后台页面，实现“跳转”
+        st.session_state.page_selection = "计时扫码" 
 
 def display_login_page():
     """管理员登录页面"""
@@ -433,32 +442,37 @@ def display_login_page():
     st.info("请输入管理员密码以访问后台管理功能。")
     
     with st.form("login_form"):
-        password = st.text_input("密码", type="password")
-        submitted = st.form_submit_button("登录")
+        # 将密码输入框设置为 key，以便在回调函数中访问其值
+        password = st.text_input("密码", type="password", key="login_password_input")
+        
+        # 将跳转逻辑绑定到回调函数 on_click
+        submitted = st.form_submit_button(
+            "登录",
+            on_click=set_login_success # 点击时，调用 set_login_success
+        )
         
         if submitted:
-            if password == ADMIN_PASSWORD:
-                # 1. 设置登录状态为 True
-                st.session_state.logged_in = True
-                
-                # 2. 强制将页面导航状态设置为一个后台页面，实现“跳转”
-                st.session_state.page_selection = "计时扫码" 
-                
-                # 3. 提供成功反馈和短暂延时，让 Streamlit 自然刷新
-                st.success("登录成功！正在进入后台管理页面...")
-                time.sleep(1) # 暂停1秒，让用户看到成功信息，然后让 Streamlit 自动完成刷新周期
-            else:
+            # 只有密码错误时才显示错误信息，成功逻辑交给 on_click
+            if st.session_state.login_password_input != ADMIN_PASSWORD:
                 st.error("密码错误，请重试。")
+            else:
+                # 成功时，显示成功信息并短暂延时（on_click已设置跳转状态）
+                st.success("登录成功！正在进入后台管理页面...")
+                time.sleep(1) 
+
 
 def display_logout_button():
     """退出登录按钮"""
-    if st.sidebar.button("退出登录"):
+    def set_logout():
         st.session_state.logged_in = False
         st.session_state.page_selection = "选手登记" # 退出后返回公共页面
+        
+    if st.sidebar.button("退出登录", on_click=set_logout):
+        # 退出后强制重跑，因为回调函数不会自动触发 rerun
         st.experimental_rerun()
 
 
-# --- 10. Streamlit 主应用入口 (Session State 管理页面选择) ---
+# --- 10. Streamlit 主应用入口 ---
 
 def main_app():
     load_athletes_data()
@@ -508,4 +522,3 @@ if __name__ == '__main__':
         layout="wide"
     )
     main_app()
-
