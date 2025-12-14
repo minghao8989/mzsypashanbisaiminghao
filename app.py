@@ -3,16 +3,17 @@ import pandas as pd
 import os
 from datetime import datetime
 import time 
+import json # 引入 JSON 库用于配置文件的读写
 
 # --- 1. 配置和数据文件定义 & 安全设置 ---
 
 # 定义数据文件名
 ATHLETES_FILE = 'athletes.csv'
 RECORDS_FILE = 'timing_records.csv'
+CONFIG_FILE = 'config.json' # 新增配置文件
 
 # 【重要安全设置】管理员密码
-# ⚠️ 请务必将这里的默认密码替换成你自己的安全密码！
-ADMIN_PASSWORD = "123" 
+ADMIN_PASSWORD = "your_secure_password_123" 
 LOGIN_PAGE = "管理员登录"
 
 # 初始化 Session State 以跟踪登录状态和页面选择
@@ -22,7 +23,35 @@ if 'page_selection' not in st.session_state:
     st.session_state.page_selection = "选手登记"
 
 
-# --- 2. 辅助函数：文件加载与保存 (保持一致) ---
+# --- 2. 辅助函数：配置文件的加载与保存 ---
+
+DEFAULT_CONFIG = {
+    "system_title": "梅州市第三人民医院赛事管理系统",
+    "registration_title": "梅州市第三人民医院选手资料登记"
+}
+
+def load_config():
+    """加载配置数据，如果文件不存在或出错，则创建默认配置"""
+    if not os.path.exists(CONFIG_FILE) or os.path.getsize(CONFIG_FILE) == 0:
+        save_config(DEFAULT_CONFIG)
+        return DEFAULT_CONFIG
+    
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            # 确保加载的配置包含所有默认字段
+            return {**DEFAULT_CONFIG, **config} 
+    except Exception:
+        save_config(DEFAULT_CONFIG)
+        return DEFAULT_CONFIG
+
+def save_config(config_data):
+    """保存配置数据到 JSON 文件"""
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(config_data, f, ensure_ascii=False, indent=4)
+
+
+# --- 3. 辅助函数：文件加载与保存 (保持一致) ---
 
 def load_athletes_data():
     """加载选手资料文件，如果不存在或为空，则创建包含表头的空文件"""
@@ -57,7 +86,7 @@ def save_records_data(df):
     """保存计时数据到 CSV (使用 utf-8-sig 编码防乱码)"""
     df.to_csv(RECORDS_FILE, index=False, encoding='utf-8-sig')
 
-# --- 3. 核心计算与格式化函数 (保持一致) ---
+# --- 4. 核心计算与格式化函数 (保持一致) ---
 
 def calculate_net_time(df_records):
     """根据扫码记录计算每位选手的总用时和分段用时。"""
@@ -91,12 +120,13 @@ def format_time(seconds):
     return f"{minutes:02d}:{remaining_seconds:06.3f}"
 
 
-# --- 4. 页面函数：选手登记 (Public Access) ---
+# --- 5. 页面函数：选手登记 (Public Access) ---
 
-def display_registration_form():
+# 修改：接受 config 参数
+def display_registration_form(config):
     """选手资料登记页面"""
-    # <<< 标题定制 >>>
-    st.header("👤 梅州市第三人民医院选手资料登记") 
+    # <<< 标题使用配置 >>>
+    st.header(f"👤 {config['registration_title']}") 
     st.info("请准确填写以下信息，并记住由系统生成的比赛编号。")
 
     with st.form("registration_form"):
@@ -145,9 +175,10 @@ def display_registration_form():
             st.session_state.phone = ''
 
 
-# --- 5. 页面函数：计时扫码 (Private Access) ---
+# --- 6. 页面函数：计时扫码 (Private Access) ---
 
-def display_timing_scanner():
+# 修改：接受 config 参数
+def display_timing_scanner(config):
     """计时扫码页面"""
     
     checkpoint_type = st.sidebar.selectbox(
@@ -156,8 +187,8 @@ def display_timing_scanner():
         key='checkpoint_select'
     ).split(' ')[0].upper()
 
-    # <<< 标题定制 >>>
-    st.header(f"⏱️ 梅州市第三人民医院 {checkpoint_type} 计时终端") 
+    # <<< 标题使用配置 >>>
+    st.header(f"⏱️ {config['system_title'].replace('赛事管理系统', '').strip()} {checkpoint_type} 计时终端") 
     st.subheader(f"当前检查点: {checkpoint_type}")
     st.info("请在此处输入选手的比赛编号进行计时。")
 
@@ -205,7 +236,7 @@ def display_timing_scanner():
             st.session_state.scan_athlete_id = ""
 
 
-# --- 6. 页面函数：排名结果 (Private Access) ---
+# --- 7. 页面函数：排名结果 (Private Access) ---
 
 def display_results_ranking():
     """结果统计与排名页面"""
@@ -250,83 +281,119 @@ def display_results_ranking():
         mime="text/csv"
     )
 
-# --- 7. 页面函数：管理员数据管理 (Private Access) ---
+# --- 8. 页面函数：管理员数据管理 (Private Access) ---
 
-def display_admin_data_management():
+# 整合：新增系统配置页面
+def display_admin_data_management(config):
     """管理员数据查看和编辑页面"""
     st.header("🔑 数据管理 (管理员权限)")
-    st.warning("在此处修改数据需谨慎，任何更改都将直接保存到 CSV 文件中！")
     
+    # 新增侧边栏选择：数据表 vs 系统配置
     data_select = st.sidebar.radio(
-        "选择要管理的数据表", 
-        ["选手资料 (athletes)", "计时记录 (records)"]
+        "选择要管理的项目", 
+        ["数据表 (选手/记录)", "系统配置 (标题)"]
     )
 
-    if data_select == "选手资料 (athletes)":
-        st.subheader("📝 选手资料编辑")
-        df_athletes = load_athletes_data()
-        
-        edited_df = st.data_editor(
-            df_athletes,
-            num_rows="dynamic",
-            column_config={
-                "athlete_id": st.column_config.Column("选手编号", help="必须唯一且不能重复", disabled=False),
-            },
-            key="edit_athletes_data",
-            use_container_width=True
-        )
-
-        if st.button("💾 确认修改并保存选手数据"):
-            try:
-                if edited_df['athlete_id'].duplicated().any():
-                    st.error("保存失败：'athlete_id' 列中存在重复编号！请修正后保存。")
-                elif edited_df['athlete_id'].astype(str).str.contains(r'[^\d]').any():
-                    st.error("保存失败：'athlete_id' 必须是纯数字编号。")
-                else:
-                    edited_df['athlete_id'] = edited_df['athlete_id'].astype(str) 
-                    save_athlete_data(edited_df)
-                    st.success("✅ 选手资料修改已成功保存！")
-                    time.sleep(1)
-                    st.experimental_rerun() 
-            except Exception as e:
-                st.error(f"保存失败：{e}")
-
-
-    elif data_select == "计时记录 (records)":
-        st.subheader("⏱️ 计时记录编辑")
-        df_records = load_records_data()
-        
-        st.info("提示：请谨慎修改时间戳。格式应为 YYYY-MM-DD HH:MM:SS.SSSSSS")
-        
-        edited_df = st.data_editor(
-            df_records,
-            num_rows="dynamic",
-            column_config={
-                "checkpoint_type": st.column_config.Column("检查点类型", help="必须是 START, MID, FINISH 之一"),
-            },
-            key="edit_records_data",
-            use_container_width=True
+    if data_select == "数据表 (选手/记录)":
+        st.warning("在此处修改数据需谨慎，任何更改都将直接保存到 CSV 文件中！")
+        data_table_select = st.radio(
+            "选择要管理的数据表", 
+            ["选手资料 (athletes)", "计时记录 (records)"]
         )
         
-        if st.button("💾 确认修改并保存计时记录"):
-            try:
-                edited_df['timestamp'] = pd.to_datetime(edited_df['timestamp'], errors='raise')
-                
-                if not edited_df['checkpoint_type'].isin(['START', 'MID', 'FINISH']).all():
-                    st.error("保存失败：'checkpoint_type' 列包含无效值，必须是 START, MID, FINISH 之一。")
-                    return
+        if data_table_select == "选手资料 (athletes)":
+            st.subheader("📝 选手资料编辑")
+            df_athletes = load_athletes_data()
+            
+            edited_df = st.data_editor(
+                df_athletes,
+                num_rows="dynamic",
+                column_config={
+                    "athlete_id": st.column_config.Column("选手编号", help="必须唯一且不能重复", disabled=False),
+                },
+                key="edit_athletes_data",
+                use_container_width=True
+            )
+
+            if st.button("💾 确认修改并保存选手数据"):
+                try:
+                    if edited_df['athlete_id'].duplicated().any():
+                        st.error("保存失败：'athlete_id' 列中存在重复编号！请修正后保存。")
+                    elif edited_df['athlete_id'].astype(str).str.contains(r'[^\d]').any():
+                        st.error("保存失败：'athlete_id' 必须是纯数字编号。")
+                    else:
+                        edited_df['athlete_id'] = edited_df['athlete_id'].astype(str) 
+                        save_athlete_data(edited_df)
+                        st.success("✅ 选手资料修改已成功保存！")
+                        time.sleep(1)
+                        st.experimental_rerun() 
+                except Exception as e:
+                    st.error(f"保存失败：{e}")
+
+
+        elif data_table_select == "计时记录 (records)":
+            st.subheader("⏱️ 计时记录编辑")
+            df_records = load_records_data()
+            
+            st.info("提示：请谨慎修改时间戳。格式应为 YYYY-MM-DD HH:MM:SS.SSSSSS")
+            
+            edited_df = st.data_editor(
+                df_records,
+                num_rows="dynamic",
+                column_config={
+                    "checkpoint_type": st.column_config.Column("检查点类型", help="必须是 START, MID, FINISH 之一"),
+                },
+                key="edit_records_data",
+                use_container_width=True
+            )
+            
+            if st.button("💾 确认修改并保存计时记录"):
+                try:
+                    edited_df['timestamp'] = pd.to_datetime(edited_df['timestamp'], errors='raise')
                     
-                save_records_data(edited_df)
-                st.success("✅ 计时记录修改已成功保存！")
+                    if not edited_df['checkpoint_type'].isin(['START', 'MID', 'FINISH']).all():
+                        st.error("保存失败：'checkpoint_type' 列包含无效值，必须是 START, MID, FINISH 之一。")
+                        return
+                        
+                    save_records_data(edited_df)
+                    st.success("✅ 计时记录修改已成功保存！")
+                    time.sleep(1)
+                    st.experimental_rerun()
+                except ValueError:
+                    st.error("保存失败：'timestamp' 列的日期时间格式不正确，请确保格式正确。")
+                except Exception as e:
+                    st.error(f"保存失败：{e}")
+
+    # --- 新增：系统配置修改页面 ---
+    elif data_select == "系统配置 (标题)":
+        st.subheader("⚙️ 系统标题与配置修改")
+        st.info("修改以下配置项后，点击保存，系统将自动重新加载以应用新标题。")
+
+        with st.form("config_form"):
+            new_system_title = st.text_input(
+                "系统主标题 (侧边栏顶部和计时页面)", 
+                value=config['system_title'],
+                key="new_sys_title"
+            )
+            
+            new_reg_title = st.text_input(
+                "选手登记页面标题", 
+                value=config['registration_title'],
+                key="new_reg_title"
+            )
+
+            if st.form_submit_button("✅ 保存并应用配置"):
+                new_config = {
+                    "system_title": new_system_title,
+                    "registration_title": new_reg_title
+                }
+                save_config(new_config)
+                st.success("配置已保存！系统正在重新加载...")
                 time.sleep(1)
                 st.experimental_rerun()
-            except ValueError:
-                st.error("保存失败：'timestamp' 列的日期时间格式不正确，请确保格式正确。")
-            except Exception as e:
-                st.error(f"保存失败：{e}")
 
 
-# --- 8. 页面函数：归档与重置 (Private Access) ---
+# --- 9. 页面函数：归档与重置 (Private Access) ---
 
 def archive_and_reset_race_data():
     """将当前数据归档，并清空活动文件以便开始新的比赛。"""
@@ -427,7 +494,7 @@ def display_archive_reset():
         st.error(f"加载历史数据时发生错误：{e}")
 
 
-# --- 9. 页面函数：管理员登录 (修复后的跳转逻辑) ---
+# --- 10. 页面函数：管理员登录 (修复后的跳转逻辑) ---
 
 # 定义登录成功后的回调函数
 def set_login_success():
@@ -473,42 +540,44 @@ def display_logout_button():
         st.experimental_rerun()
 
 
-# --- 10. Streamlit 主应用入口 ---
+# --- 11. Streamlit 主应用入口 ---
 
 def main_app():
+    # 1. 加载配置和数据
+    config = load_config() # <<< 加载配置 >>>
     load_athletes_data()
     load_records_data()
     
-    # <<< 标题定制 >>>
-    st.sidebar.title("🏁 梅州市第三人民医院赛事管理系统")
+    # 2. 侧边栏标题使用配置
+    st.sidebar.title(f"🏁 {config['system_title']}")
     
-    # 1. 定义导航列表
+    # 3. 定义导航列表
     if st.session_state.logged_in:
         pages = ["选手登记", "计时扫码", "排名结果", "数据管理（管理员）", "归档与重置"]
         display_logout_button()
     else:
         pages = ["选手登记", LOGIN_PAGE]
 
-    # 2. 确保当前的页面选择在可用列表中
+    # 4. 确保当前的页面选择在可用列表中
     if st.session_state.page_selection not in pages:
         st.session_state.page_selection = pages[0]
     
-    # 3. 导航栏：使用 key='page_selection' 来管理当前选中的页面
+    # 5. 导航栏
     page = st.sidebar.radio("选择功能模块", pages, 
                             index=pages.index(st.session_state.page_selection), 
                             key='page_selection') 
 
-    # 4. 路由
+    # 6. 路由 (传递 config 到需要标题的页面)
     if page == "选手登记":
-        display_registration_form()
+        display_registration_form(config) # <<< 传递配置 >>>
     elif page == LOGIN_PAGE:
         display_login_page()
     elif page == "计时扫码":
-        display_timing_scanner()
+        display_timing_scanner(config) # <<< 传递配置 >>>
     elif page == "排名结果":
         display_results_ranking()
     elif page == "数据管理（管理员）":
-        display_admin_data_management()
+        display_admin_data_management(config) # <<< 传递配置 >>>
     elif page == "归档与重置":
         display_archive_reset()
     
@@ -517,11 +586,13 @@ def main_app():
 
 
 if __name__ == '__main__':
-    # <<< 标题定制 >>>
+    # 预加载配置，用于设置浏览器标签页标题
+    initial_config = load_config() 
+    
+    # 设置浏览器标签页标题
     st.set_page_config(
-        page_title="梅州市第三人民医院赛事管理系统", # 浏览器标签页标题
+        page_title=initial_config['system_title'], 
         page_icon="🏃",
         layout="wide"
     )
     main_app()
-
