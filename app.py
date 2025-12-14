@@ -3,17 +3,17 @@ import pandas as pd
 import os
 from datetime import datetime
 import time 
-import json # 引入 JSON 库用于配置文件的读写
+import json 
 
 # --- 1. 配置和数据文件定义 & 安全设置 ---
 
 # 定义数据文件名
 ATHLETES_FILE = 'athletes.csv'
 RECORDS_FILE = 'timing_records.csv'
-CONFIG_FILE = 'config.json' # 新增配置文件
+CONFIG_FILE = 'config.json' 
 
 # 【重要安全设置】管理员密码
-ADMIN_PASSWORD = "your_secure_password_123" 
+ADMIN_PASSWORD = "123" 
 LOGIN_PAGE = "管理员登录"
 
 # 初始化 Session State 以跟踪登录状态和页面选择
@@ -122,10 +122,8 @@ def format_time(seconds):
 
 # --- 5. 页面函数：选手登记 (Public Access) ---
 
-# 修改：接受 config 参数
 def display_registration_form(config):
     """选手资料登记页面"""
-    # <<< 标题使用配置 >>>
     st.header(f"👤 {config['registration_title']}") 
     st.info("请准确填写以下信息，并记住由系统生成的比赛编号。")
 
@@ -177,7 +175,6 @@ def display_registration_form(config):
 
 # --- 6. 页面函数：计时扫码 (Private Access) ---
 
-# 修改：接受 config 参数
 def display_timing_scanner(config):
     """计时扫码页面"""
     
@@ -187,7 +184,6 @@ def display_timing_scanner(config):
         key='checkpoint_select'
     ).split(' ')[0].upper()
 
-    # <<< 标题使用配置 >>>
     st.header(f"⏱️ {config['system_title'].replace('赛事管理系统', '').strip()} {checkpoint_type} 计时终端") 
     st.subheader(f"当前检查点: {checkpoint_type}")
     st.info("请在此处输入选手的比赛编号进行计时。")
@@ -283,12 +279,20 @@ def display_results_ranking():
 
 # --- 8. 页面函数：管理员数据管理 (Private Access) ---
 
-# 整合：新增系统配置页面
+# 新增回调函数，用于解决 config 保存后的 Attribute Error
+def save_config_callback():
+    """将表单数据保存到 config.json 文件"""
+    new_config = {
+        "system_title": st.session_state.new_sys_title,
+        "registration_title": st.session_state.new_reg_title
+    }
+    save_config(new_config)
+    # 不调用 rerun，让 Streamlit 自动完成刷新周期
+
 def display_admin_data_management(config):
     """管理员数据查看和编辑页面"""
     st.header("🔑 数据管理 (管理员权限)")
     
-    # 新增侧边栏选择：数据表 vs 系统配置
     data_select = st.sidebar.radio(
         "选择要管理的项目", 
         ["数据表 (选手/记录)", "系统配置 (标题)"]
@@ -364,7 +368,7 @@ def display_admin_data_management(config):
                 except Exception as e:
                     st.error(f"保存失败：{e}")
 
-    # --- 新增：系统配置修改页面 ---
+    # --- 系统配置修改页面 (修复了 Attribute Error) ---
     elif data_select == "系统配置 (标题)":
         st.subheader("⚙️ 系统标题与配置修改")
         st.info("修改以下配置项后，点击保存，系统将自动重新加载以应用新标题。")
@@ -382,15 +386,12 @@ def display_admin_data_management(config):
                 key="new_reg_title"
             )
 
-            if st.form_submit_button("✅ 保存并应用配置"):
-                new_config = {
-                    "system_title": new_system_title,
-                    "registration_title": new_reg_title
-                }
-                save_config(new_config)
+            # <<< 核心修复：使用回调函数 save_config_callback >>>
+            if st.form_submit_button("✅ 保存并应用配置", on_click=save_config_callback):
                 st.success("配置已保存！系统正在重新加载...")
-                time.sleep(1)
-                st.experimental_rerun()
+                # 只需短暂延迟，让 Streamlit 自动完成刷新周期
+                time.sleep(1) 
+                # 注意：这里不再需要 st.experimental_rerun()，避免冲突
 
 
 # --- 9. 页面函数：归档与重置 (Private Access) ---
@@ -494,15 +495,13 @@ def display_archive_reset():
         st.error(f"加载历史数据时发生错误：{e}")
 
 
-# --- 10. 页面函数：管理员登录 (修复后的跳转逻辑) ---
+# --- 10. 页面函数：管理员登录 (保持一致) ---
 
 # 定义登录成功后的回调函数
 def set_login_success():
     """登录成功后设置状态并跳转页面"""
-    # 仅在密码正确时执行以下操作
     if st.session_state.login_password_input == ADMIN_PASSWORD:
         st.session_state.logged_in = True
-        # 强制将页面导航状态设置为一个后台页面，实现“跳转”
         st.session_state.page_selection = "计时扫码" 
 
 def display_login_page():
@@ -511,21 +510,17 @@ def display_login_page():
     st.info("请输入管理员密码以访问后台管理功能。")
     
     with st.form("login_form"):
-        # 将密码输入框设置为 key，以便在回调函数中访问其值
         password = st.text_input("密码", type="password", key="login_password_input")
         
-        # 将跳转逻辑绑定到回调函数 on_click
         submitted = st.form_submit_button(
             "登录",
-            on_click=set_login_success # 点击时，调用 set_login_success
+            on_click=set_login_success
         )
         
         if submitted:
-            # 只有密码错误时才显示错误信息，成功逻辑交给 on_click
             if st.session_state.login_password_input != ADMIN_PASSWORD:
                 st.error("密码错误，请重试。")
             else:
-                # 成功时，显示成功信息并短暂延时（on_click已设置跳转状态）
                 st.success("登录成功！正在进入后台管理页面...")
                 time.sleep(1) 
 
@@ -534,7 +529,7 @@ def display_logout_button():
     """退出登录按钮"""
     def set_logout():
         st.session_state.logged_in = False
-        st.session_state.page_selection = "选手登记" # 退出后返回公共页面
+        st.session_state.page_selection = "选手登记"
         
     if st.sidebar.button("退出登录", on_click=set_logout):
         st.experimental_rerun()
@@ -544,7 +539,7 @@ def display_logout_button():
 
 def main_app():
     # 1. 加载配置和数据
-    config = load_config() # <<< 加载配置 >>>
+    config = load_config()
     load_athletes_data()
     load_records_data()
     
@@ -569,15 +564,15 @@ def main_app():
 
     # 6. 路由 (传递 config 到需要标题的页面)
     if page == "选手登记":
-        display_registration_form(config) # <<< 传递配置 >>>
+        display_registration_form(config)
     elif page == LOGIN_PAGE:
         display_login_page()
     elif page == "计时扫码":
-        display_timing_scanner(config) # <<< 传递配置 >>>
+        display_timing_scanner(config)
     elif page == "排名结果":
         display_results_ranking()
     elif page == "数据管理（管理员）":
-        display_admin_data_management(config) # <<< 传递配置 >>>
+        display_admin_data_management(config) # <<< 修复后使用 config >>>
     elif page == "归档与重置":
         display_archive_reset()
     
@@ -589,7 +584,6 @@ if __name__ == '__main__':
     # 预加载配置，用于设置浏览器标签页标题
     initial_config = load_config() 
     
-    # 设置浏览器标签页标题
     st.set_page_config(
         page_title=initial_config['system_title'], 
         page_icon="🏃",
