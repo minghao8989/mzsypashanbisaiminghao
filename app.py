@@ -11,14 +11,15 @@ ATHLETES_FILE = 'athletes.csv'
 RECORDS_FILE = 'timing_records.csv'
 
 # 【重要安全设置】管理员密码
-# ⚠️ 注意：在真实生产环境中，不应将密码硬编码在这里！
-# 推荐使用 Streamlit Secrets (st.secrets) 来安全存储密码。
-ADMIN_PASSWORD = "mzsygh" # 请替换成你自己的安全密码！
+# ⚠️ 请务必将这里的默认密码替换成你自己的安全密码！
+ADMIN_PASSWORD = "your_secure_password_123" 
 LOGIN_PAGE = "管理员登录"
 
-# 初始化 Session State 以跟踪登录状态
+# 初始化 Session State 以跟踪登录状态和页面选择
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
+if 'page_selection' not in st.session_state:
+    st.session_state.page_selection = "选手登记"
 
 
 # --- 2. 辅助函数：文件加载与保存 (保持一致) ---
@@ -329,17 +330,14 @@ def archive_and_reset_race_data():
     """将当前数据归档，并清空活动文件以便开始新的比赛。"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # 1. 归档选手资料
     if os.path.exists(ATHLETES_FILE) and os.path.getsize(ATHLETES_FILE) > 0:
         new_archive_name = f"ARCHIVE_ATHLETES_{timestamp}.csv"
         os.rename(ATHLETES_FILE, new_archive_name)
     
-    # 2. 归档计时记录
     if os.path.exists(RECORDS_FILE) and os.path.getsize(RECORDS_FILE) > 0:
         new_archive_name = f"ARCHIVE_RECORDS_{timestamp}.csv"
         os.rename(RECORDS_FILE, new_archive_name)
 
-    # 3. 清空/重新初始化活动文件
     load_athletes_data()
     load_records_data()
     
@@ -426,7 +424,8 @@ def display_archive_reset():
     except Exception as e:
         st.error(f"加载历史数据时发生错误：{e}")
 
-# --- 9. 页面函数：管理员登录 (新增) ---
+
+# --- 9. 页面函数：管理员登录 (优化后的跳转逻辑) ---
 
 def display_login_page():
     """管理员登录页面"""
@@ -439,10 +438,15 @@ def display_login_page():
         
         if submitted:
             if password == ADMIN_PASSWORD:
+                # 1. 设置登录状态为 True
                 st.session_state.logged_in = True
+                
+                # 2. 强制将页面导航状态设置为一个后台页面，实现“跳转”
+                st.session_state.page_selection = "计时扫码" 
+                
+                # 3. 提供成功反馈和短暂延时，让 Streamlit 自然刷新
                 st.success("登录成功！正在进入后台管理页面...")
-                time.sleep(1)
-                st.experimental_rerun()
+                time.sleep(1) # 暂停1秒，让用户看到成功信息，然后让 Streamlit 自动完成刷新周期
             else:
                 st.error("密码错误，请重试。")
 
@@ -450,10 +454,11 @@ def display_logout_button():
     """退出登录按钮"""
     if st.sidebar.button("退出登录"):
         st.session_state.logged_in = False
+        st.session_state.page_selection = "选手登记" # 退出后返回公共页面
         st.experimental_rerun()
 
 
-# --- 10. Streamlit 主应用入口 (逻辑调整) ---
+# --- 10. Streamlit 主应用入口 (Session State 管理页面选择) ---
 
 def main_app():
     load_athletes_data()
@@ -461,19 +466,24 @@ def main_app():
     
     st.sidebar.title("🏁 赛事管理系统")
     
-    # 根据登录状态显示不同的导航菜单
+    # 1. 定义导航列表
     if st.session_state.logged_in:
-        # 已登录用户：显示所有功能和退出按钮
         pages = ["选手登记", "计时扫码", "排名结果", "数据管理（管理员）", "归档与重置"]
         display_logout_button()
     else:
-        # 未登录用户：只显示公共功能和登录入口
         pages = ["选手登记", LOGIN_PAGE]
 
-    # 导航栏
-    page = st.sidebar.radio("选择功能模块", pages, index=0)
+    # 2. 确保当前的页面选择在可用列表中
+    if st.session_state.page_selection not in pages:
+        # 如果当前页面（比如计时扫码）在退出后不再可用，则默认跳转到第一个可用页面
+        st.session_state.page_selection = pages[0]
+    
+    # 3. 导航栏：使用 key='page_selection' 来管理当前选中的页面
+    page = st.sidebar.radio("选择功能模块", pages, 
+                            index=pages.index(st.session_state.page_selection), 
+                            key='page_selection') 
 
-    # 路由
+    # 4. 路由
     if page == "选手登记":
         display_registration_form()
     elif page == LOGIN_PAGE:
@@ -498,4 +508,3 @@ if __name__ == '__main__':
         layout="wide"
     )
     main_app()
-
