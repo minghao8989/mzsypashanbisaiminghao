@@ -13,7 +13,7 @@ RECORDS_FILE = 'timing_records.csv'
 # 【重要安全设置】管理员密码
 # ⚠️ 注意：在真实生产环境中，不应将密码硬编码在这里！
 # 推荐使用 Streamlit Secrets (st.secrets) 来安全存储密码。
-ADMIN_PASSWORD = "your_secure_password_123" # 请替换成你自己的安全密码！
+ADMIN_PASSWORD = "mzsygh" # 请替换成你自己的安全密码！
 LOGIN_PAGE = "管理员登录"
 
 # 初始化 Session State 以跟踪登录状态
@@ -498,3 +498,4 @@ if __name__ == '__main__':
         layout="wide"
     )
     main_app()
+
