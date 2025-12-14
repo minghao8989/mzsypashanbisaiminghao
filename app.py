@@ -33,7 +33,7 @@ DEFAULT_CONFIG = {
     "registration_title": "梅州市第三人民医院选手资料登记",
     # 默认用户配置
     "users": {
-        "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
+        "admin": {"password": "123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
         "referee01": {"password": "referee_pass", "role": "Referee"}
     }
@@ -856,3 +856,4 @@ if __name__ == '__main__':
         layout="wide"
     )
     main_app()
+
