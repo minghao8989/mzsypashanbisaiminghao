@@ -12,7 +12,7 @@ RECORDS_FILE = 'timing_records.csv'
 
 # 【重要安全设置】管理员密码
 # ⚠️ 请务必将这里的默认密码替换成你自己的安全密码！
-ADMIN_PASSWORD = "123" 
+ADMIN_PASSWORD = "your_secure_password_123" 
 LOGIN_PAGE = "管理员登录"
 
 # 初始化 Session State 以跟踪登录状态和页面选择
@@ -95,8 +95,9 @@ def format_time(seconds):
 
 def display_registration_form():
     """选手资料登记页面"""
-    st.header("👤 选手资料登记")
-    st.info("请准确填写以下信息，并记住系统生成的比赛编号。")
+    # <<< 标题定制 >>>
+    st.header("👤 梅州市第三人民医院选手资料登记") 
+    st.info("请准确填写以下信息，并记住由系统生成的比赛编号。")
 
     with st.form("registration_form"):
         department = st.text_input("单位/部门", key="department").strip()
@@ -155,7 +156,8 @@ def display_timing_scanner():
         key='checkpoint_select'
     ).split(' ')[0].upper()
 
-    st.header(f"⏱️ {checkpoint_type} 计时终端")
+    # <<< 标题定制 >>>
+    st.header(f"⏱️ 梅州市第三人民医院 {checkpoint_type} 计时终端") 
     st.subheader(f"当前检查点: {checkpoint_type}")
     st.info("请在此处输入选手的比赛编号进行计时。")
 
@@ -468,7 +470,6 @@ def display_logout_button():
         st.session_state.page_selection = "选手登记" # 退出后返回公共页面
         
     if st.sidebar.button("退出登录", on_click=set_logout):
-        # 退出后强制重跑，因为回调函数不会自动触发 rerun
         st.experimental_rerun()
 
 
@@ -478,7 +479,8 @@ def main_app():
     load_athletes_data()
     load_records_data()
     
-    st.sidebar.title("🏁 赛事管理系统")
+    # <<< 标题定制 >>>
+    st.sidebar.title("🏁 梅州市第三人民医院赛事管理系统")
     
     # 1. 定义导航列表
     if st.session_state.logged_in:
@@ -489,7 +491,6 @@ def main_app():
 
     # 2. 确保当前的页面选择在可用列表中
     if st.session_state.page_selection not in pages:
-        # 如果当前页面（比如计时扫码）在退出后不再可用，则默认跳转到第一个可用页面
         st.session_state.page_selection = pages[0]
     
     # 3. 导航栏：使用 key='page_selection' 来管理当前选中的页面
@@ -516,10 +517,10 @@ def main_app():
 
 
 if __name__ == '__main__':
+    # <<< 标题定制 >>>
     st.set_page_config(
-        page_title="山地赛计时终端",
+        page_title="梅州市第三人民医院赛事管理系统", # 浏览器标签页标题
         page_icon="🏃",
         layout="wide"
     )
     main_app()
-
