@@ -13,18 +13,20 @@ RECORDS_FILE = 'timing_records.csv'
 CONFIG_FILE = 'config.json'
 
 LOGIN_PAGE = "系统用户登录"
-ATHLETE_LOGIN_PAGE = "选手登录" # 新增选手登录页
+ATHLETE_LOGIN_PAGE = "选手登录"
 ATHLETE_WELCOME_PAGE = "选手欢迎页"
 
 # 初始化 Session State
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
-if 'athlete_logged_in' not in st.session_state: # 新增选手登录状态
+if 'athlete_logged_in' not in st.session_state:
     st.session_state.athlete_logged_in = False
 if 'username' not in st.session_state:
     st.session_state.username = None
 if 'user_role' not in st.session_state:
     st.session_state.user_role = None
+if 'athlete_username' not in st.session_state:
+    st.session_state.athlete_username = None
 if 'page_selection' not in st.session_state:
     st.session_state.page_selection = "选手登记"
     
@@ -57,7 +59,6 @@ def load_config():
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
-            # 确保加载的配置包含所有默认字段
             return {**DEFAULT_CONFIG, **config, 
                     'users': {**DEFAULT_CONFIG.get('users', {}), **config.get('users', {})}}
     except Exception:
@@ -165,81 +166,92 @@ def display_registration_form(config):
     """选手资料登记页面"""
     st.header(f"👤 {config['registration_title']}")
     
-    if not st.session_state.logged_in or check_permission(["SuperAdmin", "Referee"]):
-        st.info("请准确填写以下信息。**您的姓名为账号，手机号为密码。**")
-        
-        # 【BUG 修复关键】使用 clear_on_submit=True 自动清理表单输入
-        with st.form("registration_form", clear_on_submit=True): 
-            
-            # 使用临时的 key，避免与 session state 冲突
-            department = st.text_input("单位/部门", key="department_reg_input").strip()
-            name = st.text_input("姓名 (将作为登录账号)", key="name_reg_input").strip()
-            gender = st.selectbox("性别", ["男", "女", "其他"], key="gender_reg_input")
-            phone = st.text_input("手机号 (将作为登录密码，且用于唯一标识)", key="phone_reg_input").strip()
-            
-            submitted = st.form_submit_button("提交报名")
-
-            if submitted:
-                if not all([department, name, gender, phone]):
-                    st.error("请填写所有必填信息。")
-                    return
-
-                df_athletes = load_athletes_data()
-                
-                # 检查手机号是否重复注册
-                if phone in df_athletes['phone'].values:
-                    st.error(f"该手机号 ({phone}) 已注册，请勿重复提交。")
-                    return
-                
-                # 检查姓名是否重复 (作为账号)
-                if name in df_athletes['username'].values:
-                    st.error(f"该姓名 **{name}** 已被注册为账号。请使用您的全名，如果仍重复，请联系裁判修改。")
-                    return
-
-                # 生成 ID (逻辑不变)
-                if df_athletes.empty:
-                    new_id = 1001
-                else:
-                    numeric_ids = pd.to_numeric(df_athletes['athlete_id'], errors='coerce').dropna()
-                    new_id = int(numeric_ids.max()) + 1 if not numeric_ids.empty else 1001
-                
-                new_id_str = str(new_id)
-                
-                # --- 生成账号和密码 ---
-                new_username = name
-                new_password = phone 
-
-                new_athlete = pd.DataFrame([{
-                    'athlete_id': new_id_str,
-                    'department': department,
-                    'name': name,
-                    'gender': gender,
-                    'phone': phone,
-                    'username': new_username,
-                    'password': new_password
-                }])
-
-                df_athletes = pd.concat([df_athletes, new_athlete], ignore_index=True)
-                save_athlete_data(df_athletes)
-
-                st.success(f"""
-                    🎉 报名成功!
-                    - 比赛编号：**{new_id_str}**
-                    - 计时账号 (姓名)：**{new_username}**
-                    - 计时密码 (手机号)：**{new_password}**
-                    请前往 **计时扫码** 页面使用此信息签到。
-                """)
-                
-                st.experimental_rerun()
+    # 只有未登录或裁判/管理员才能登记
+    if not st.session_state.logged_in and not st.session_state.athlete_logged_in:
+        pass # 公众可访问
+    elif st.session_state.logged_in and check_permission(["SuperAdmin", "Referee"]):
+        pass # 管理员可访问
     else:
         st.error("您没有权限进行选手登记操作。")
+        return
+
+    st.info("请准确填写以下信息。**您的姓名为账号，手机号为密码。**")
+    
+    # 【核心修复】使用 clear_on_submit=True 自动清理表单输入
+    with st.form("registration_form", clear_on_submit=True): 
+        
+        # 使用临时的 key，避免与 session state 冲突
+        department = st.text_input("单位/部门", key="department_reg_input").strip()
+        name = st.text_input("姓名 (将作为登录账号)", key="name_reg_input").strip()
+        gender = st.selectbox("性别", ["男", "女", "其他"], key="gender_reg_input")
+        phone = st.text_input("手机号 (将作为登录密码，且用于唯一标识)", key="phone_reg_input").strip()
+        
+        submitted = st.form_submit_button("提交报名")
+
+        if submitted:
+            if not all([department, name, gender, phone]):
+                st.error("请填写所有必填信息。")
+                return
+
+            df_athletes = load_athletes_data()
+            
+            # 检查手机号是否重复注册
+            if phone in df_athletes['phone'].values:
+                st.error(f"该手机号 ({phone}) 已注册，请勿重复提交。")
+                return
+            
+            # 检查姓名是否重复 (作为账号)
+            if name in df_athletes['username'].values:
+                st.error(f"该姓名 **{name}** 已被注册为账号。请使用您的全名，如果仍重复，请联系裁判修改。")
+                return
+
+            # 生成 ID (逻辑不变)
+            if df_athletes.empty:
+                new_id = 1001
+            else:
+                numeric_ids = pd.to_numeric(df_athletes['athlete_id'], errors='coerce').dropna()
+                new_id = int(numeric_ids.max()) + 1 if not numeric_ids.empty else 1001
+            
+            new_id_str = str(new_id)
+            
+            # --- 生成账号和密码 ---
+            new_username = name
+            new_password = phone 
+
+            new_athlete = pd.DataFrame([{
+                'athlete_id': new_id_str,
+                'department': department,
+                'name': name,
+                'gender': gender,
+                'phone': phone,
+                'username': new_username,
+                'password': new_password
+            }])
+
+            df_athletes = pd.concat([df_athletes, new_athlete], ignore_index=True)
+            save_athlete_data(df_athletes)
+
+            st.success(f"""
+                🎉 报名成功!
+                - 比赛编号：**{new_id_str}**
+                - 计时账号 (姓名)：**{new_username}**
+                - 计时密码 (手机号)：**{new_password}**
+                请前往 **选手登录** 页面使用此信息登录，查看您的信息。
+            """)
+            
+            st.experimental_rerun()
 
 
 # --- 5.5 新增：选手欢迎页面 ---
 def display_athlete_welcome_page(config):
     """选手登录成功后显示的欢迎页面"""
+    if not st.session_state.athlete_logged_in:
+        st.error("请先登录选手账号。")
+        return
+        
     st.header(f"🎉 {config['athlete_welcome_title']}")
     
+    # 自定义消息显示
     st.markdown(f"""
         <div style="padding: 15px; border-radius: 5px; background-color: #f0f2f6; border-left: 5px solid #00c0f2;">
             <p style="font-size: 1.1em; margin: 0;">{config['athlete_welcome_message']}</p>
@@ -251,7 +263,13 @@ def display_athlete_welcome_page(config):
     
     # 查找当前登录选手的信息
     df_athletes = load_athletes_data()
-    current_athlete = df_athletes[df_athletes['username'] == st.session_state.athlete_username].iloc[0]
+    current_athlete = df_athletes[df_athletes['username'] == st.session_state.athlete_username]
+    
+    if current_athlete.empty:
+        st.error("错误：未找到该选手信息。请联系管理员。")
+        return
+        
+    current_athlete = current_athlete.iloc[0]
     
     col1, col2 = st.columns(2)
     with col1:
@@ -396,7 +414,6 @@ def save_config_callback():
     new_config = {
         "system_title": st.session_state.new_sys_title,
         "registration_title": st.session_state.new_reg_title,
-        # 新增保存欢迎页配置
         "athlete_welcome_title": st.session_state.new_welcome_title,
         "athlete_welcome_message": st.session_state.new_welcome_message,
     }
@@ -532,7 +549,7 @@ def display_admin_data_management(config):
     
     management_options = ["数据表 (选手/记录)"]
     if check_permission(["SuperAdmin"]):
-        management_options.append("系统配置 (标题/用户/欢迎页)") # 修改选项名称
+        management_options.append("系统配置 (标题/用户/欢迎页)")
 
     data_select = st.sidebar.radio(
         "选择要管理的项目",
@@ -635,7 +652,7 @@ def display_admin_data_management(config):
                     st.error(f"保存失败：{e}")
 
     # --- 系统配置修改页面 ---
-    elif data_select == "系统配置 (标题/用户/欢迎页)": # 修改选项名称
+    elif data_select == "系统配置 (标题/用户/欢迎页)":
         
         config_option = st.radio("选择配置项", ["修改系统标题", "用户权限管理", "选手欢迎页配置"])
 
@@ -897,7 +914,6 @@ def display_athlete_login_page(config):
             st.success("登录成功！正在进入欢迎页面...")
             st.session_state.page_selection = ATHLETE_WELCOME_PAGE
             
-            # 选手登录成功后，清空密码，但保留姓名作为账号供下次使用
             st.session_state.athlete_login_password_input = "" 
             time.sleep(1)
             st.experimental_rerun()
@@ -940,41 +956,38 @@ def main_app():
     st.sidebar.title(f"🏁 {config['system_title']}")
     
     # 3. 定义导航列表 (根据权限动态生成)
-    pages = ["选手登记"]
+    
+    # 初始化基础页面
+    pages = ["选手登记"] 
     
     # 选手已登录
     if st.session_state.athlete_logged_in:
         st.sidebar.write(f"当前选手：**{st.session_state.athlete_username}**")
-        pages.append(ATHLETE_WELCOME_PAGE)
+        pages = [ATHLETE_WELCOME_PAGE] # 移除选手登录后的“选手登记”
         display_athlete_logout_button()
     
     # 管理员/系统用户已登录
     elif st.session_state.logged_in:
         role = st.session_state.user_role
         st.sidebar.write(f"管理用户：**{st.session_state.username}** ({role})")
-
-        if role in ["SuperAdmin", "Referee"]:
-            pages.append("计时扫码")
         
-        if role in ["SuperAdmin", "Leader"]:
-            pages.append("排名结果")
-            
-        if role in ["SuperAdmin", "Referee"]:
-            pages.append("数据管理")
-        
-        if role == "SuperAdmin":
-            pages.append("归档与重置")
+        # 权限页面
+        if role in ["SuperAdmin", "Referee"]: pages.append("计时扫码")
+        if role in ["SuperAdmin", "Leader"]: pages.append("排名结果")
+        if role in ["SuperAdmin", "Referee"]: pages.append("数据管理")
+        if role == "SuperAdmin": pages.append("归档与重置")
             
         display_logout_button()
         
-    # 未登录
+    # 未登录 (默认显示登记、选手登录、管理员登录)
     else:
-        pages.append(ATHLETE_LOGIN_PAGE) # 选手登录入口
-        pages.append(LOGIN_PAGE) # 管理员登录入口
+        pages.append(ATHLETE_LOGIN_PAGE)
+        pages.append(LOGIN_PAGE)
 
 
     # 4. 确保当前的页面选择在可用列表中
     if st.session_state.page_selection not in pages:
+        # 如果当前页面不在权限列表中，默认跳转到第一个有权限的页面
         st.session_state.page_selection = pages[0]
     
     # 5. 导航栏
