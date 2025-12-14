@@ -28,6 +28,11 @@ if 'page_selection' not in st.session_state:
     st.session_state.page_selection = "选手登记"
 if 'role' not in st.session_state:
     st.session_state.role = None 
+if '_pending_page' not in st.session_state: # 新增：用于安全跳转标记
+    st.session_state._pending_page = None 
+if '_config_updated' not in st.session_state: # 新增：用于配置更新标记
+    st.session_state._config_updated = False 
+
 
 # --- 2. 辅助函数：用户和配置文件的加载与保存 ---
 
@@ -239,12 +244,12 @@ def display_timing_scanner(config):
 
             current_time = datetime.now()
             
-            new_record = pd.DataFrame({
+            new_record = pd.DataFrame([{
                 'athlete_id': [athlete_id], 
                 'checkpoint_type': [checkpoint_type], 
                 'timestamp': [current_time]
-            })
-            
+            }])
+
             df_records = pd.concat([df_records, new_record], ignore_index=True)
             save_records_data(df_records)
 
@@ -301,18 +306,27 @@ def display_results_ranking():
     )
 
 # --- 7. 页面函数：管理员数据管理 (Referee/Admin Access) ---
+
+# 配置保存回调函数 (修复 config 提交冲突)
 def save_config_callback():
     new_config = {
         "system_title": st.session_state.new_sys_title,
         "registration_title": st.session_state.new_reg_title
     }
     save_config(new_config)
-    # 不调用 rerun，让 Streamlit 自动完成刷新周期
+    st.session_state._config_updated = True # 标记配置已更新
 
 def display_admin_data_management(config):
     """管理员数据查看和编辑页面"""
     st.header("🔑 数据管理 (权限: {})".format(ROLES.get(st.session_state.role, '未知')))
     
+    # 检查是否有待处理的配置更新标记
+    if st.session_state._config_updated:
+        st.success("配置已保存！系统正在重新加载以应用新标题...")
+        st.session_state._config_updated = False # 清除标记
+        time.sleep(1) 
+        st.experimental_rerun() # 强制重跑以加载新配置
+
     # 根据权限调整选项
     data_options = ["数据表 (选手/记录)"]
     if st.session_state.role == 'admin':
@@ -402,8 +416,8 @@ def display_admin_data_management(config):
                     key="new_reg_title"
                 )
                 if st.form_submit_button("✅ 保存并应用配置", on_click=save_config_callback):
-                    st.success("配置已保存！系统正在重新加载...")
-                    time.sleep(1) 
+                    # 成功信息由主页面的 _config_updated 标记处理
+                    pass 
 
         with user_tab:
             display_user_management()
@@ -589,7 +603,7 @@ def display_archive_reset():
         st.error(f"加载历史数据时发生错误：{e}")
 
 
-# --- 10. 页面函数：管理员登录 (使用用户数据库) ---
+# --- 10. 页面函数：管理员登录 (修复 Login 冲突) ---
 
 def set_login_success_with_role():
     """登录成功后设置状态和角色"""
@@ -599,8 +613,8 @@ def set_login_success_with_role():
     
     if username in users and users[username]['password_hash'] == hash_password(password):
         st.session_state.logged_in = True
-        st.session_state.role = users[username]['role'] # 存储角色
-        st.session_state.page_selection = "计时扫码" 
+        st.session_state.role = users[username]['role'] 
+        st.session_state._pending_page = "计时扫码" # 使用标记进行安全跳转
     else:
         # 错误信息处理已在 display_login_page 中完成
         pass
@@ -644,10 +658,24 @@ def display_logout_button():
         st.experimental_rerun()
 
 
-# --- 11. Streamlit 主应用入口 (根据角色控制导航) ---
+# --- 11. Streamlit 主应用入口 (包含安全跳转逻辑) ---
 
 def main_app():
-    # 1. 初始化文件，加载配置和数据
+    # 1. 检查并应用待处理的页面跳转标记
+    if st.session_state._pending_page:
+        st.session_state.page_selection = st.session_state._pending_page
+        st.session_state._pending_page = None # 清除标记
+        st.experimental_rerun() # 强制安全跳转
+
+    # 2. 检查并应用待处理的配置更新标记
+    # 这个检查必须在加载 config 之后，但在设置 sidebar 之前
+    if st.session_state._config_updated:
+        # 此时配置已保存，应用已重新加载，但需要再次重跑以刷新浏览器标签页标题
+        st.session_state._config_updated = False # 清除标记
+        st.experimental_rerun() 
+        
+
+    # 3. 初始化文件，加载配置和数据
     load_users() 
     config = load_config()
     load_athletes_data()
@@ -655,11 +683,10 @@ def main_app():
     
     st.sidebar.title(f"🏁 {config['system_title']}")
     
-    # 2. 根据角色定义用户可见的页面列表
+    # 4. 根据角色定义用户可见的页面列表
     if st.session_state.logged_in:
         display_logout_button()
         
-        # 基础页面，所有已登录用户可见
         pages = ["选手登记", "计时扫码", "数据管理（管理员）"]
         
         # 权限控制：Admin (主席/领导) 可见排名和归档
@@ -670,19 +697,18 @@ def main_app():
         st.sidebar.markdown(f"**当前用户: {st.session_state.role} ({ROLES.get(st.session_state.role)})**")
         
     else:
-        # 未登录用户：只看到公共页面和登录入口
         pages = ["选手登记", LOGIN_PAGE]
 
-    # 3. 确保当前的页面选择在可用列表中
+    # 5. 确保当前的页面选择在可用列表中
     if st.session_state.page_selection not in pages:
         st.session_state.page_selection = pages[0]
     
-    # 4. 导航栏
+    # 6. 导航栏
     page = st.sidebar.radio("选择功能模块", pages, 
                             index=pages.index(st.session_state.page_selection), 
                             key='page_selection') 
 
-    # 5. 路由
+    # 7. 路由
     if page == "选手登记":
         display_registration_form(config)
     elif page == LOGIN_PAGE:
@@ -690,12 +716,10 @@ def main_app():
     elif page == "计时扫码":
         display_timing_scanner(config)
     elif page == "排名结果":
-        # 如果用户不是 Admin，即使 URL 强制访问，也会被阻止（在第 2 步 Pages 列表已控制）
         display_results_ranking()
     elif page == "数据管理（管理员）":
         display_admin_data_management(config)
     elif page == "归档与重置":
-        # 如果用户不是 Admin，即使 URL 强制访问，也会被阻止
         display_archive_reset()
     
     st.sidebar.markdown("---")
