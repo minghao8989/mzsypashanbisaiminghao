@@ -177,7 +177,7 @@ def display_registration_form(config):
 
     st.info("请准确填写以下信息。**您的姓名为账号，手机号为密码。**")
     
-    # 【核心修复】使用 clear_on_submit=True 自动清理表单输入，并移除 key 属性以避免 Session State 冲突
+    # 【核心修复】使用 clear_on_submit=True 自动清理表单输入，并避免在表单组件中使用 key 属性来规避 Streamlit 的潜在状态冲突
     with st.form("registration_form", clear_on_submit=True): 
         
         # 不使用 key 属性
@@ -239,6 +239,8 @@ def display_registration_form(config):
                 请前往 **选手登录** 页面使用此信息登录，查看您的信息。
             """)
             
+            # 提交成功，表单自动清空，然后重新运行
+            time.sleep(1)
             st.experimental_rerun()
 
 
@@ -474,7 +476,7 @@ def display_user_management(config):
                 
                 if new_password == "********":
                     if username in config['users']:
-                         new_password = config['users'][username]['password']
+                            new_password = config['users'][username]['password']
                     else:
                         st.error(f"用户 {username} 配置错误，无法获取原始密码。")
                         return
@@ -607,7 +609,7 @@ def display_admin_data_management(config):
                     elif merged_df['athlete_id'].str.contains(r'[^\d]').any():
                         st.error("保存失败：'athlete_id' 必须是纯数字编号。")
                     elif merged_df['athlete_id'].isin(['', 'nan', 'NaN']).any():
-                         st.error("保存失败：'athlete_id' 不能为空。")
+                            st.error("保存失败：'athlete_id' 不能为空。")
                     else:
                         final_save_df = merged_df[['athlete_id', 'department', 'name', 'gender', 'phone', 'username', 'password']]
                         save_athlete_data(final_save_df)
