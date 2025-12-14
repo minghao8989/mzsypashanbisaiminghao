@@ -12,7 +12,7 @@ RECORDS_FILE = 'timing_records.csv'
 
 # 【重要安全设置】管理员密码
 # ⚠️ 请务必将这里的默认密码替换成你自己的安全密码！
-ADMIN_PASSWORD = "your_secure_password_123" 
+ADMIN_PASSWORD = "123" 
 LOGIN_PAGE = "管理员登录"
 
 # 初始化 Session State 以跟踪登录状态和页面选择
@@ -508,3 +508,4 @@ if __name__ == '__main__':
         layout="wide"
     )
     main_app()
+
