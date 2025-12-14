@@ -24,6 +24,12 @@ if 'user_role' not in st.session_state:
     st.session_state.user_role = None
 if 'page_selection' not in st.session_state:
     st.session_state.page_selection = "选手登记"
+    
+# 确保登录输入框的 key 存在
+if 'login_username_input' not in st.session_state:
+    st.session_state.login_username_input = ""
+if 'login_password_input' not in st.session_state:
+    st.session_state.login_password_input = ""
 
 
 # --- 2. 辅助函数：配置文件的加载与保存 & 权限检查 ---
@@ -33,7 +39,7 @@ DEFAULT_CONFIG = {
     "registration_title": "梅州市第三人民医院选手资料登记",
     # 默认用户配置
     "users": {
-        "admin": {"password": "123", "role": "SuperAdmin"},
+        "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
         "referee01": {"password": "referee_pass", "role": "Referee"}
     }
@@ -49,7 +55,7 @@ def load_config():
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
             # 合并用户配置，确保默认用户仍在
-            return {**DEFAULT_CONFIG, **config, 'users': {**DEFAULT_CONFIG['users'], **config.get('users', {})}}
+            return {**DEFAULT_CONFIG, **config, 'users': {**DEFAULT_CONFIG.get('users', {}), **config.get('users', {})}}
     except Exception:
         save_config(DEFAULT_CONFIG)
         return DEFAULT_CONFIG
@@ -337,6 +343,7 @@ def save_config_callback():
         "registration_title": st.session_state.new_reg_title
     }
     current_config = load_config()
+    # 仅更新标题部分，保留用户配置
     current_config.update(new_config)
     save_config(current_config)
 
@@ -379,7 +386,7 @@ def display_user_management(config):
             "密码": st.column_config.Column(
                 "密码",
                 help="点击单元格可直接修改密码。请勿使用空密码。",
-                # 当密码隐藏时，禁止在表格中直接修改，需先显示密码
+                # 当密码隐藏时，禁止在表格中直接修改
                 disabled=not show_passwords 
             )
         },
@@ -390,13 +397,12 @@ def display_user_management(config):
     if st.button("💾 确认修改并保存用户数据"):
         try:
             new_users_config = {}
-            # 遍历编辑后的DataFrame，检查数据并更新配置
             for _, row in edited_df.iterrows():
                 username = row['用户名']
                 new_password = row['密码']
                 new_role = row['角色']
                 
-                # 如果密码被隐藏且没有修改 ('********' 或禁用修改)，则保留原密码
+                # 如果密码被隐藏且没有修改 ('********')，则保留原密码
                 if new_password == "********":
                     if username in config['users']:
                          new_password = config['users'][username]['password']
@@ -717,7 +723,7 @@ def display_archive_reset():
 # --- 10. 页面函数：用户登录与登出 ---
 
 def set_login_success(config):
-    """登录成功后设置状态并跳转页面"""
+    """【修复后的回调函数】仅设置登录状态，不进行页面跳转和 rerun"""
     username = st.session_state.login_username_input.strip().lower()
     password = st.session_state.login_password_input
     
@@ -725,15 +731,7 @@ def set_login_success(config):
         st.session_state.logged_in = True
         st.session_state.username = username
         st.session_state.user_role = config['users'][username]['role']
-        
-        # 根据角色设置默认跳转页面
-        role = st.session_state.user_role
-        if role in ["SuperAdmin", "Referee"]:
-            st.session_state.page_selection = "计时扫码"
-        elif role == "Leader":
-            st.session_state.page_selection = "排名结果"
-        
-        st.experimental_rerun()
+        # 移除 st.experimental_rerun()，让主应用逻辑处理跳转
     else:
         st.session_state.logged_in = False
         st.session_state.user_role = None
@@ -743,17 +741,40 @@ def display_login_page(config):
     st.header("🔑 系统用户登录")
     st.info("请输入您的用户名和密码以访问对应功能。")
     
+    # 检查是否已登录成功（用于表单提交后的处理）
+    is_login_attempted = False
+    
     with st.form("login_form"):
         username = st.text_input("用户名", key="login_username_input")
         password = st.text_input("密码", type="password", key="login_password_input")
         
-        submitted = st.form_submit_button("登录")
+        submitted = st.form_submit_button("登录", on_click=lambda: set_login_success(config))
         
         if submitted:
-            set_login_success(config) 
-
-            if not st.session_state.logged_in:
-                 st.error("用户名或密码错误，请重试。")
+            is_login_attempted = True
+    
+    # 【核心修复】在表单外进行跳转和反馈
+    if is_login_attempted:
+        if st.session_state.logged_in:
+            st.success("登录成功！正在进入功能页面...")
+            
+            # 确定跳转页面
+            role = st.session_state.user_role
+            if role in ["SuperAdmin", "Referee"]:
+                st.session_state.page_selection = "计时扫码"
+            elif role == "Leader":
+                st.session_state.page_selection = "排名结果"
+            else:
+                st.session_state.page_selection = "选手登记" # 默认跳转
+                
+            # 清理密码输入框，防止下次加载时显示
+            st.session_state.login_password_input = "" 
+            time.sleep(1) # 增加延迟确保提示显示
+            st.experimental_rerun()
+        else:
+            st.error("用户名或密码错误，请重试。")
+            # 清理密码输入框
+            st.session_state.login_password_input = ""
 
 
 def display_logout_button():
@@ -786,19 +807,15 @@ def main_app():
         role = st.session_state.user_role
         st.sidebar.write(f"用户：**{st.session_state.username}** ({role})")
 
-        # 裁判和超级管理员
         if role in ["SuperAdmin", "Referee"]:
             pages.append("计时扫码")
         
-        # 领导和超级管理员
         if role in ["SuperAdmin", "Leader"]:
             pages.append("排名结果")
             
-        # 裁判和超级管理员 (裁判只能编辑数据表)
         if role in ["SuperAdmin", "Referee"]:
             pages.append("数据管理")
         
-        # 超级管理员独有
         if role == "SuperAdmin":
             pages.append("归档与重置")
             
@@ -856,4 +873,3 @@ if __name__ == '__main__':
         layout="wide"
     )
     main_app()
-
