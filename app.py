@@ -177,14 +177,14 @@ def display_registration_form(config):
 
     st.info("请准确填写以下信息。**您的姓名为账号，手机号为密码。**")
     
-    # 【核心修复】使用 clear_on_submit=True 自动清理表单输入
+    # 【核心修复】使用 clear_on_submit=True 自动清理表单输入，并移除 key 属性以避免 Session State 冲突
     with st.form("registration_form", clear_on_submit=True): 
         
-        # 使用临时的 key，避免与 session state 冲突
-        department = st.text_input("单位/部门", key="department_reg_input").strip()
-        name = st.text_input("姓名 (将作为登录账号)", key="name_reg_input").strip()
-        gender = st.selectbox("性别", ["男", "女", "其他"], key="gender_reg_input")
-        phone = st.text_input("手机号 (将作为登录密码，且用于唯一标识)", key="phone_reg_input").strip()
+        # 不使用 key 属性
+        department = st.text_input("单位/部门").strip()
+        name = st.text_input("姓名 (将作为登录账号)").strip()
+        gender = st.selectbox("性别", ["男", "女", "其他"])
+        phone = st.text_input("手机号 (将作为登录密码，且用于唯一标识)").strip()
         
         submitted = st.form_submit_button("提交报名")
 
@@ -877,6 +877,7 @@ def display_login_page(config):
         if st.session_state.logged_in:
             st.success("登录成功！正在进入功能页面...")
             
+            # 根据角色设置 page_selection
             role = st.session_state.user_role
             if role in ["SuperAdmin", "Referee"]:
                 st.session_state.page_selection = "计时扫码"
@@ -957,13 +958,12 @@ def main_app():
     
     # 3. 定义导航列表 (根据权限动态生成)
     
-    # 初始化基础页面
-    pages = ["选手登记"] 
+    pages = ["选手登记"] # 始终保留登记页作为起点
     
     # 选手已登录
     if st.session_state.athlete_logged_in:
         st.sidebar.write(f"当前选手：**{st.session_state.athlete_username}**")
-        pages = [ATHLETE_WELCOME_PAGE] # 移除选手登录后的“选手登记”
+        pages = [ATHLETE_WELCOME_PAGE] # 选手登录后，只显示欢迎页
         display_athlete_logout_button()
     
     # 管理员/系统用户已登录
@@ -971,6 +971,8 @@ def main_app():
         role = st.session_state.user_role
         st.sidebar.write(f"管理用户：**{st.session_state.username}** ({role})")
         
+        pages = ["选手登记"] # 管理员/裁判也应该能看到登记页
+
         # 权限页面
         if role in ["SuperAdmin", "Referee"]: pages.append("计时扫码")
         if role in ["SuperAdmin", "Leader"]: pages.append("排名结果")
