@@ -5,6 +5,23 @@ from datetime import datetime
 import time
 import json
 import re
+# 导入 webrtc 组件
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
+import av
+import threading
+import numpy as np
+
+# 导入 OpenCV 和 pyzbar 用于二维码识别
+try:
+    import cv2
+    from pyzbar.pyzbar import decode
+    OPENCV_AVAILABLE = True
+except ImportError:
+    # 如果环境不支持 OpenCV/pyzbar，提供替代方案
+    OPENCV_AVAILABLE = False
+    class DummyCV:
+        def imshow(*args, **kwargs): pass
+    cv2 = DummyCV()
 
 # --- 1. 配置和数据文件定义 & 常量 ---
 
@@ -16,6 +33,10 @@ LOGIN_PAGE = "系统用户登录"
 ATHLETE_LOGIN_PAGE = "选手登录"
 ATHLETE_WELCOME_PAGE = "选手欢迎页"
 CHECKPOINTS = ['START', 'MID', 'FINISH'] # 定义检查点类型
+
+# Session State 变量用于摄像头状态
+if 'scan_status' not in st.session_state:
+    st.session_state.scan_status = None # None, 'SCANNING', 'SUCCESS', 'DUPLICATE'
 
 # 初始化 Session State
 if 'logged_in' not in st.session_state:
@@ -36,6 +57,7 @@ if 'login_username_input' not in st.session_state:
 if 'login_password_input' not in st.session_state:
     st.session_state.login_password_input = ""
 
+
 # --- 2. 辅助函数：配置文件的加载与保存 & 权限检查 ---
 
 DEFAULT_CONFIG = {
@@ -43,8 +65,8 @@ DEFAULT_CONFIG = {
     "registration_title": "梅州市第三人民医院选手资料登记",
     "athlete_welcome_title": "恭喜您报名成功！",
     "athlete_welcome_message": "感谢您积极参加本单位的赛事活动，祝您能够取得好成绩。",
-    "athlete_sign_in_message": "请使用您的手机扫描场边提供的检查点二维码进行计时登记。", # 简化后的提示
-    "QR_CODE_BASE_URL": "http://127.0.0.1:8501", # 【重要】请在部署后修改为您的 Streamlit 公网地址
+    "athlete_sign_in_message": "请点击下方按钮打开摄像头，扫描检查点二维码进行计时登记。", # 修改提示
+    "QR_CODE_BASE_URL": "http://127.0.0.1:8501", 
     "users": {
         "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
@@ -246,10 +268,61 @@ def display_registration_form(config):
             st.experimental_rerun()
 
 
-# --- 5.5 新增：选手欢迎页面 (核心计时逻辑) ---
+# --- 5.5 新增：选手欢迎页面 (集成摄像头扫码逻辑) ---
+
+class QRCodeScanner(VideoProcessorBase):
+    """WebRTC 视频帧处理器：用于检测二维码"""
+
+    def __init__(self, athlete_id):
+        self.athlete_id = athlete_id
+        # 使用锁确保 scan_result 线程安全
+        self.lock = threading.Lock()
+        self.scan_result = None # 存储扫描到的检查点结果 (e.g., 'START')
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        if self.scan_result:
+            # 如果已经扫描到结果，直接返回帧，不再处理
+            return frame 
+        
+        img = frame.to_ndarray(format="bgr24")
+        
+        # 将帧转换为灰度图
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # 使用 pyzbar 解码二维码
+        decoded_objects = decode(gray)
+        
+        for obj in decoded_objects:
+            data = obj.data.decode('utf-8')
+            
+            # 提取二维码中的检查点信息 (例如：URL中的 checkpoint=START)
+            match = re.search(r'checkpoint=(\w+)', data)
+            if match:
+                checkpoint_type = match.group(1).upper()
+                if checkpoint_type in CHECKPOINTS:
+                    # 线程安全地设置结果
+                    with self.lock:
+                        self.scan_result = checkpoint_type
+                        
+                    # 绘制矩形标记扫描成功
+                    points = obj.polygon
+                    if len(points) == 4:
+                        pts = np.array(points, np.int32)
+                        pts = pts.reshape((-1, 1, 2))
+                        cv2.polylines(img, [pts], True, (0, 255, 0), 3) # 绿色
+                    
+                    # 绘制文本提示
+                    cv2.putText(img, f"Scanned: {checkpoint_type}", (50, 50), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+                    
+                    # 此时 Streamlit 主线程应该会检测到 scan_result 并处理计时
+                    return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
+
 
 def handle_checkpoint_scan(athlete_id, checkpoint_type):
-    """处理选手扫码后的计时登记逻辑"""
+    """处理选手扫码后的计时登记逻辑 (与之前版本一致)"""
     
     df_records = load_records_data()
     df_athletes = load_athletes_data()
@@ -264,7 +337,8 @@ def handle_checkpoint_scan(athlete_id, checkpoint_type):
     ]
 
     if not existing_records.empty:
-        st.warning(f"选手 **{name}** 已在 **{checkpoint_type}** 签到成功，请勿重复操作！记录时间：**{existing_records['timestamp'].iloc[0].strftime('%H:%M:%S.%f')[:-3]}**")
+        st.session_state.scan_status = 'DUPLICATE'
+        st.session_state.scan_result_info = f"选手 **{name}** 已在 **{checkpoint_type}** 签到成功！"
         return
 
     # 2. 提交新记录
@@ -279,11 +353,12 @@ def handle_checkpoint_scan(athlete_id, checkpoint_type):
     df_records = pd.concat([df_records, new_record], ignore_index=True)
     save_records_data(df_records)
 
-    success_message = f"恭喜 **{name}** (编号: {athlete_id})！**{checkpoint_type}** 签到成功！记录时间：**{current_time.strftime('%H:%M:%S.%f')[:-3]}**"
-    st.success(success_message)
-
-    # 3. 重新加载，清除 URL 参数 (可选，但推荐)
-    # st.experimental_rerun() # 如果需要强制刷新页面，可以在这里加
+    st.session_state.scan_status = 'SUCCESS'
+    st.session_state.scan_result_info = f"恭喜 **{name}**！**{checkpoint_type}** 签到成功！记录时间：**{current_time.strftime('%H:%M:%S.%f')[:-3]}**"
+    
+    # 3. 强制页面刷新以显示最终结果
+    time.sleep(1)
+    st.experimental_rerun()
 
 
 def display_athlete_welcome_page(config):
@@ -301,23 +376,6 @@ def display_athlete_welcome_page(config):
         
     current_athlete = current_athlete_df.iloc[0]
     athlete_id = current_athlete['athlete_id']
-
-    # ----------------------------------------------------
-    # 【新流程核心】检查 URL 参数，执行计时
-    # ----------------------------------------------------
-    query_params = st.query_params
-    checkpoint_param = query_params.get('checkpoint')
-
-    if checkpoint_param and checkpoint_param in CHECKPOINTS:
-        # 清除 URL 参数，防止用户刷新后重复记录
-        query_params.pop('checkpoint')
-        st.query_params = query_params 
-        
-        # 跳转到计时成功状态
-        handle_checkpoint_scan(athlete_id, checkpoint_param)
-        st.subheader(f"✅ {checkpoint_param} 签到完成！")
-        st.experimental_rerun() # 必须 reran 一次，使页面回到无参数状态
-        return # 立即退出，避免渲染下面的欢迎页内容
 
     st.header(f"🎉 {config['athlete_welcome_title']}")
     
@@ -338,13 +396,50 @@ def display_athlete_welcome_page(config):
     st.subheader("⏱️ 计时签到操作")
     st.info(config['athlete_sign_in_message']) 
     
-    # 提示和操作说明
-    st.markdown(f"""
-    **操作步骤：**
-    1. 请用您的手机（已登录此页面）**摄像头** 扫描场边显示的 **检查点二维码** (如起点 START)。
-    2. 扫描后，页面会自动跳转并完成计时登记。
-    """)
-    st.warning("⚠️ 扫码成功后，请等待页面显示 **签到成功** 信息。")
+    # --- 扫码状态显示 ---
+    if st.session_state.scan_status == 'SUCCESS':
+        st.success(st.session_state.scan_result_info)
+        st.session_state.scan_status = None # 清除状态
+    elif st.session_state.scan_status == 'DUPLICATE':
+        st.warning(st.session_state.scan_result_info)
+        st.session_state.scan_status = None # 清除状态
+    elif st.session_state.scan_status == 'SCANNING':
+        st.warning("正在打开摄像头，请对准二维码...")
+    
+    # --- 摄像头/扫码逻辑 ---
+    if not OPENCV_AVAILABLE:
+        st.error("🚨 缺少依赖：无法启用摄像头扫码功能！请确保已安装 `opencv-python` 和 `pyzbar`。")
+        st.warning("请回到之前的 URL 扫码模式，或联系管理员解决依赖问题。")
+        return
+
+    # 1. 设置 webrtc_streamer 
+    # key 必须唯一，这里使用 athlete_id
+    webrtc_ctx = webrtc_streamer(
+        key=f"qr_scanner_{athlete_id}",
+        mode=WebRtcMode.SENDRECV,
+        video_processor_factory=lambda: QRCodeScanner(athlete_id),
+        media_stream_constraints={"video": {"facingMode": "environment"}}, # 尝试调用后置摄像头
+        async_processing=True,
+    )
+    
+    if webrtc_ctx.state.playing:
+        st.session_state.scan_status = 'SCANNING'
+        
+        # 2. 检查处理器是否已经扫描到结果
+        if webrtc_ctx.video_processor:
+            result = webrtc_ctx.video_processor.scan_result
+            if result:
+                # 扫描到结果后，停止视频流并处理计时
+                webrtc_ctx.stop() 
+                handle_checkpoint_scan(athlete_id, result)
+                st.experimental_rerun() # 强制刷新以显示最终结果
+        
+    else:
+        st.session_state.scan_status = None
+        st.warning("点击上方 'START' 按钮以启用摄像头进行扫码。")
+
+    st.markdown("---")
+    st.info("请将手机对准场边检查点二维码。**二维码内容格式必须是包含 'checkpoint=START/MID/FINISH' 的完整 URL。**")
 
 
 # --- 6. 页面函数：计时扫码 (裁判提供二维码链接) ---
@@ -371,6 +466,7 @@ def display_timing_scanner(config):
     st.markdown("---")
     
     for i, checkpoint in enumerate(CHECKPOINTS):
+        # 完整的二维码链接
         qr_link = f"{base_url}?checkpoint={checkpoint}"
         
         col1, col2 = st.columns([1, 4])
@@ -464,7 +560,7 @@ def save_url_config_callback():
         "athlete_welcome_title": st.session_state.new_welcome_title,
         "athlete_welcome_message": st.session_state.new_welcome_message,
         "athlete_sign_in_message": st.session_state.new_sign_in_message,
-        "QR_CODE_BASE_URL": st.session_state.new_base_url, # 保存新的 URL
+        "QR_CODE_BASE_URL": st.session_state.new_base_url, 
     }
     current_config = load_config()
     current_config.update(new_config)
@@ -599,7 +695,7 @@ def display_admin_data_management(config):
     
     management_options = ["数据表 (选手/记录)"]
     if check_permission(["SuperAdmin"]):
-        management_options.append("系统配置 (标题/用户/链接)") # 修改为包含链接配置
+        management_options.append("系统配置 (标题/用户/链接)") # 选项卡名称修改
 
     data_select = st.sidebar.radio(
         "选择要管理的项目",
@@ -704,7 +800,7 @@ def display_admin_data_management(config):
     # --- 系统配置修改页面 ---
     elif data_select == "系统配置 (标题/用户/链接)":
         
-        config_option = st.radio("选择配置项", ["修改系统标题", "用户权限管理", "选手欢迎页配置和链接"]) # 选项卡名称修改
+        config_option = st.radio("选择配置项", ["修改系统标题", "用户权限管理", "选手欢迎页配置和链接"])
 
         if config_option == "修改系统标题":
             st.subheader("⚙️ 系统标题与登记页配置修改")
@@ -920,6 +1016,7 @@ def set_athlete_login_success():
     if not verified_athlete.empty:
         st.session_state.athlete_logged_in = True
         st.session_state.athlete_username = athlete_username
+        st.session_state.scan_status = None # 清除扫码状态
     else:
         st.session_state.athlete_logged_in = False
         st.session_state.athlete_username = None
@@ -1007,6 +1104,7 @@ def display_athlete_logout_button():
         st.session_state.athlete_logged_in = False
         st.session_state.athlete_username = None
         st.session_state.page_selection = "选手登记"
+        st.session_state.scan_status = None # 退出时清除扫码状态
         
     if st.sidebar.button("退出选手账号", on_click=set_athlete_logout):
         st.experimental_rerun()
