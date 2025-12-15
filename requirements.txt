@@ -1,4 +1,5 @@
 streamlit
 pandas
-qrcode
-itsdangerous
+streamlit-webrtc
+opencv-python
+pyzbar
