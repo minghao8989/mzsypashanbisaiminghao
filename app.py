@@ -6,23 +6,20 @@ import time
 import json
 import re
 
-# 导入 PIL 和 pylibdmtx 用于二维码识别
+# 导入安全 Token 和二维码生成库
 try:
-    from PIL import Image
-    from pylibdmtx.pylibdmtx import decode as dmtx_decode
-    
-    # 导入 webrtc 组件
-    from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
-    import av
-    import threading
-    import numpy as np
-
-    # 标记摄像头和解码库可用
-    WEBRTC_AVAILABLE = True
+    from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadTimeSignature
+    import qrcode
+    import io
+    TOKEN_AVAILABLE = True
 except ImportError:
-    WEBRTC_AVAILABLE = False
-    class VideoProcessorBase:
-        def recv(self, frame): return frame
+    TOKEN_AVAILABLE = False
+    
+# Token 加密密钥和签名器定义
+# 【重要】请在生产环境中将 SECRET_KEY 替换为随机生成的安全字符串
+SECRET_KEY = os.environ.get("STREAMLIT_SECRET_KEY", "your_insecure_default_secret_key_12345")
+def get_serializer(key):
+    return URLSafeTimedSerializer(key)
 
 
 # --- 1. 配置和数据文件定义 & 常量 ---
@@ -36,13 +33,11 @@ ATHLETE_LOGIN_PAGE = "选手登录"
 ATHLETE_WELCOME_PAGE = "选手欢迎页"
 CHECKPOINTS = ['START', 'MID', 'FINISH'] # 定义检查点类型
 
-# Session State 变量用于摄像头状态
-if 'scan_status' not in st.session_state:
-    st.session_state.scan_status = None # None, 'IDLE', 'SCANNING', 'SUCCESS', 'DUPLICATE'
-if 'scan_result_info' not in st.session_state:
-    st.session_state.scan_result_info = ""
-if 'show_scanner' not in st.session_state:
-    st.session_state.show_scanner = False
+# Session State 变量用于二维码状态管理
+if 'current_qr' not in st.session_state:
+    st.session_state.current_qr = {'token': None, 'generated_at': 0, 'expiry': 0}
+if 'qr_placeholder' not in st.session_state:
+    st.session_state.qr_placeholder = None
 
 # 初始化 Session State (保持不变)
 if 'logged_in' not in st.session_state:
@@ -71,8 +66,9 @@ DEFAULT_CONFIG = {
     "registration_title": "梅州市第三人民医院选手资料登记",
     "athlete_welcome_title": "恭喜您报名成功！",
     "athlete_welcome_message": "感谢您积极参加本单位的赛事活动，祝您能够取得好成绩。",
-    "athlete_sign_in_message": "请点击下方按钮打开摄像头，扫描检查点二维码进行计时登记。", 
-    "QR_CODE_BASE_URL": "http://127.0.0.1:8501", 
+    "athlete_sign_in_message": "请使用您的手机（保持已登录状态）扫描下方的限时二维码进行计时登记。", 
+    "QR_CODE_BASE_URL": "http://127.0.0.1:8501", # 【重要】部署后需修改为您的 Streamlit 公网地址
+    "QR_CODE_EXPIRY_SECONDS": 90, # 二维码默认有效期 90 秒
     "users": {
         "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
@@ -274,55 +270,36 @@ def display_registration_form(config):
             st.experimental_rerun()
 
 
-# --- 5.5 新增：选手欢迎页面 (集成摄像头扫码逻辑) ---
+# --- 5.5 新增：选手欢迎页面 (基于限时二维码和 Token) ---
 
-# 【摄像头处理类：使用 PIL/pylibdmtx】
-if WEBRTC_AVAILABLE:
-    class QRCodeScanner(VideoProcessorBase):
-        """WebRTC 视频帧处理器：用于检测二维码"""
+def generate_timing_token(checkpoint_type, expiry_seconds):
+    """为指定检查点生成一个限时的安全 Token"""
+    s = get_serializer(SECRET_KEY)
+    # Token 包含检查点类型
+    data = {'cp': checkpoint_type}
+    # dumps 返回加密且带有效期的字符串
+    return s.dumps(data, salt='checkpoint-timing', max_age=expiry_seconds)
 
-        def __init__(self, athlete_id):
-            self.athlete_id = athlete_id
-            self.lock = threading.Lock()
-            self.scan_result = None 
-            self.last_scanned_time = 0
-            self.scan_cooldown = 2 # 2秒冷却时间
+def generate_qr_code_image(url):
+    """生成包含 URL 的 QR 码图像，并返回字节流"""
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=4,
+        border=4,
+    )
+    qr.add_data(url)
+    qr.make(fit=True)
 
-        def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-            
-            if self.scan_result or (time.time() - self.last_scanned_time < self.scan_cooldown):
-                # 如果已经扫描到结果或处于冷却中，直接返回帧
-                return frame 
-            
-            # 将 av.VideoFrame 转换为 PIL Image
-            img_pil = frame.to_image()
-            
-            # 使用 pylibdmtx 解码二维码
-            decoded_objects = dmtx_decode(img_pil)
-            
-            for obj in decoded_objects:
-                data = obj.data.decode('utf-8')
-                
-                # 提取二维码中的检查点信息 (例如：URL中的 checkpoint=START)
-                match = re.search(r'checkpoint=(\w+)', data)
-                if match:
-                    checkpoint_type = match.group(1).upper()
-                    if checkpoint_type in CHECKPOINTS:
-                        
-                        # 线程安全地设置结果
-                        with self.lock:
-                            self.scan_result = checkpoint_type
-                            self.last_scanned_time = time.time()
-                            
-                        # 由于 PIL 不方便绘制，这里只进行解码，不绘制图像。
-                        # 返回原始帧
-                        return frame
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # 将图像保存到内存中的字节流
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
-            return frame # 返回原始帧
-
-
-def handle_checkpoint_scan_logic(athlete_id, checkpoint_type):
-    """处理选手扫码后的计时登记逻辑"""
+def handle_timing_record(athlete_id, checkpoint_type):
+    """处理计时登记的核心逻辑"""
     
     df_records = load_records_data()
     df_athletes = load_athletes_data()
@@ -337,8 +314,8 @@ def handle_checkpoint_scan_logic(athlete_id, checkpoint_type):
     ]
 
     if not existing_records.empty:
-        st.session_state.scan_status = 'DUPLICATE'
         st.session_state.scan_result_info = f"选手 **{name}** 已在 **{checkpoint_type}** 签到成功！"
+        st.session_state.scan_status = 'DUPLICATE'
         return
 
     # 2. 提交新记录
@@ -353,18 +330,45 @@ def handle_checkpoint_scan_logic(athlete_id, checkpoint_type):
     df_records = pd.concat([df_records, new_record], ignore_index=True)
     save_records_data(df_records)
 
-    st.session_state.scan_status = 'SUCCESS'
     st.session_state.scan_result_info = f"恭喜 **{name}** (编号: {athlete_id})！**{checkpoint_type}** 签到成功！记录时间：**{current_time.strftime('%H:%M:%S.%f')[:-3]}**"
+    st.session_state.scan_status = 'SUCCESS'
     
     # 3. 强制页面刷新以显示最终结果
     time.sleep(1)
     st.experimental_rerun()
 
 
+def generate_new_qr(config, current_athlete):
+    """生成新的限时二维码并存储在 Session State"""
+    athlete_id = current_athlete['athlete_id']
+    expiry_seconds = config['QR_CODE_EXPIRY_SECONDS']
+    
+    # 我们为所有检查点生成一个通用的 Token，Token 只包含检查点类型
+    checkpoint_type = st.session_state.get('qr_checkpoint_select', CHECKPOINTS[0])
+    
+    # 生成 Token
+    token = generate_timing_token(checkpoint_type, expiry_seconds)
+    
+    # Token URL: 选手扫描后，手机打开这个链接，应用会捕获 token 参数
+    token_url = f"{config['QR_CODE_BASE_URL']}?token={token}"
+    
+    st.session_state.current_qr = {
+        'token': token,
+        'generated_at': time.time(),
+        'expiry': expiry_seconds,
+        'url': token_url,
+        'checkpoint': checkpoint_type,
+    }
+
+
 def display_athlete_welcome_page(config):
     """选手登录成功后显示的欢迎页面"""
     if not st.session_state.athlete_logged_in:
         st.error("请先登录选手账号。")
+        return
+        
+    if not TOKEN_AVAILABLE:
+        st.error("🚨 缺少 Token/QR 库：请联系管理员确保已安装 `qrcode` 和 `itsdangerous`。")
         return
         
     df_athletes = load_athletes_data()
@@ -377,6 +381,49 @@ def display_athlete_welcome_page(config):
     current_athlete = current_athlete_df.iloc[0]
     athlete_id = current_athlete['athlete_id']
 
+    # ----------------------------------------------------
+    # 【核心逻辑】检查 URL 中的 Token 参数，执行计时
+    # ----------------------------------------------------
+    query_params = st.query_params
+    token_param = query_params.get('token')
+
+    if token_param:
+        
+        # 清除 URL 参数，防止重复记录
+        query_params.pop('token')
+        st.query_params = query_params
+        
+        s = get_serializer(SECRET_KEY)
+        
+        try:
+            # 尝试解密 Token，同时验证签名和过期时间
+            data = s.loads(token_param, salt='checkpoint-timing', max_age=config['QR_CODE_EXPIRY_SECONDS'])
+            checkpoint_type = data['cp']
+            
+            # 执行计时
+            handle_timing_record(athlete_id, checkpoint_type)
+            # handle_timing_record 内部会触发 rerun，所以这里 return 即可
+            return
+            
+        except SignatureExpired:
+            st.session_state.scan_result_info = "签到失败：二维码已过期，请让选手重新生成！"
+            st.session_state.scan_status = 'DUPLICATE'
+            st.experimental_rerun()
+            return
+        except BadTimeSignature:
+            st.session_state.scan_result_info = "签到失败：Token 无效或被篡改，请确认扫描了正确的二维码。"
+            st.session_state.scan_status = 'DUPLICATE'
+            st.experimental_rerun()
+            return
+        except Exception:
+            st.session_state.scan_result_info = "签到失败：Token 解析错误。请联系管理员。"
+            st.session_state.scan_status = 'DUPLICATE'
+            st.experimental_rerun()
+            return
+
+    # ----------------------------------------------------
+    # 欢迎页渲染
+    # ----------------------------------------------------
     st.header(f"🎉 {config['athlete_welcome_title']}")
     
     st.markdown(f"""
@@ -398,87 +445,65 @@ def display_athlete_welcome_page(config):
     # --- 扫码状态显示 ---
     if st.session_state.scan_status == 'SUCCESS':
         st.success(st.session_state.scan_result_info)
-        st.session_state.show_scanner = False 
         st.session_state.scan_status = None
-        
     elif st.session_state.scan_status == 'DUPLICATE':
         st.warning(st.session_state.scan_result_info)
-        st.session_state.show_scanner = False 
         st.session_state.scan_status = None
+    
+    st.info(config['athlete_sign_in_message']) 
+    
+    # --- 二维码生成和显示逻辑 ---
+    
+    # 1. 选择要签到的检查点
+    st.selectbox("选择要签到的检查点", CHECKPOINTS, key='qr_checkpoint_select', index=0)
+    
+    # 2. 检查二维码状态 (如果是首次加载，或者Token已过期，或者检查点被切换，则生成新的)
+    current_time = time.time()
+    qr_data = st.session_state.current_qr
+    is_expired = (current_time - qr_data['generated_at']) > qr_data['expiry']
+    
+    if is_expired or qr_data['token'] is None or qr_data['checkpoint'] != st.session_state.qr_checkpoint_select:
+        generate_new_qr(config, current_athlete)
+        qr_data = st.session_state.current_qr # 更新数据
         
-    elif st.session_state.scan_status == 'SCANNING':
-        st.info("摄像头已打开，请对准二维码进行扫描...")
+    # 3. 显示二维码和倒计时
+    expiry_seconds = qr_data['expiry']
+    remaining_time = expiry_seconds - (current_time - qr_data['generated_at'])
+    
+    qr_col, info_col = st.columns([1, 2])
+    
+    with qr_col:
+        # 显示二维码图片
+        qr_image_bytes = generate_qr_code_image(qr_data['url'])
+        st.image(qr_image_bytes, 
+                 caption=f"{qr_data['checkpoint']} 检查点限时码", 
+                 width=250)
         
-    elif st.session_state.scan_status == 'ERROR_INIT':
-        st.error("🚨 摄像头初始化失败！请检查权限或重试。")
-        st.session_state.show_scanner = False
-        st.session_state.scan_status = None
-
-    # --- 启用/禁用摄像头按钮 ---
-    if st.session_state.show_scanner:
-        # 如果已显示扫描器，显示关闭按钮
-        if st.button("❌ 关闭摄像头"):
-            st.session_state.show_scanner = False
-            st.session_state.scan_status = None
-            st.experimental_rerun()
-    else:
-        # 如果未显示扫描器，显示打开按钮
-        if st.button("▶️ 打开摄像头扫码登记", type="primary"):
-            if not WEBRTC_AVAILABLE:
-                st.error("🚨 无法启用摄像头扫码功能！请联系管理员确保已安装 `streamlit-webrtc`, `Pillow` 和 `pylibdmtx`。")
-                return
-
-            st.session_state.show_scanner = True
-            st.session_state.scan_status = 'IDLE' # 设置初始状态
+    with info_col:
+        st.metric("二维码剩余有效时间", f"{int(remaining_time)} 秒")
+        if remaining_time <= 10:
+             st.warning("二维码即将过期，请尽快扫码！")
+        
+        # 强制刷新按钮
+        if st.button("🔄 立即重新生成二维码"):
+            generate_new_qr(config, current_athlete)
             st.experimental_rerun()
             return
 
-    # --- 摄像头/扫码逻辑 ---
-    if st.session_state.show_scanner and WEBRTC_AVAILABLE:
-        
-        # 1. 设置 webrtc_streamer 
-        webrtc_ctx = webrtc_streamer(
-            key=f"qr_scanner_{athlete_id}",
-            mode=WebRtcMode.SENDRECV,
-            video_processor_factory=lambda: QRCodeScanner(athlete_id),
-            media_stream_constraints={"video": {"facingMode": "environment"}}, # 尝试调用后置摄像头
-            async_processing=True,
-        )
-        
-        if webrtc_ctx.state.playing:
-            st.session_state.scan_status = 'SCANNING'
-            
-            # 2. 检查处理器是否已经扫描到结果
-            if webrtc_ctx.video_processor:
-                result = webrtc_ctx.video_processor.scan_result
-                if result:
-                    # 扫描到结果后，停止视频流并处理计时
-                    webrtc_ctx.stop() 
-                    handle_checkpoint_scan_logic(athlete_id, result)
-                    return 
-            
-        elif st.session_state.scan_status == 'SCANNING':
-             # 如果在 playing 状态下停止了，说明是用户按了停止，将状态重置
-             st.session_state.show_scanner = False
-             st.session_state.scan_status = None
-             st.experimental_rerun()
-             return
-        
-        elif st.session_state.scan_status == 'IDLE' and not webrtc_ctx.state.playing:
-             # 如果用户点击了开始，但 WebRTC 无法启动 (可能是权限问题)
-             st.session_state.scan_status = 'ERROR_INIT'
-             st.experimental_rerun()
-             return
-             
-    st.markdown("---")
-    st.info(config['athlete_sign_in_message']) 
+    # 倒计时逻辑：当剩余时间小于 1 秒时，强制刷新页面以生成新的二维码
+    if remaining_time <= 1:
+        st.experimental_rerun()
+
+    # 自动刷新：为了显示倒计时，使用 time.sleep 暂停并重新运行
+    time.sleep(1)
+    st.experimental_rerun()
 
 
 # --- 6. 页面函数：计时扫码 (裁判提供二维码链接) ---
 
 def display_timing_scanner(config):
     """
-    计时扫码页面向裁判提供二维码链接，裁判将此链接生成二维码供选手扫描。
+    管理员/裁判查看二维码链接，用于生成并打印二维码。
     """
     
     if not check_permission(["SuperAdmin", "Referee"]):
@@ -487,19 +512,27 @@ def display_timing_scanner(config):
 
     st.header(f"⏱️ 比赛检查点二维码生成")
     st.subheader("请将以下链接生成二维码，供选手用已登录手机扫描。")
-    st.warning(f"""
-    **🚨 重要提示：**
-    请确保在部署 Streamlit 应用后，修改 **数据管理 -> 系统配置** 中的 **基本应用链接** (`QR_CODE_BASE_URL`)。
-    当前链接为：`{config['QR_CODE_BASE_URL']}`
-    """)
+    
+    st.warning("此页面仅用于查看**通用链接**，选手扫码后将自动跳转回选手欢迎页完成计时。")
+    
+    st.markdown("""
+    **🚨 部署提示：**
+    - 部署后，请务必在 **数据管理 -> 系统配置** 中将 **基本应用链接** (`QR_CODE_BASE_URL`) 修改为您的公网地址或域名。
+    - 当前基本链接为：`{}`
+    """.format(config['QR_CODE_BASE_URL']))
 
     base_url = config['QR_CODE_BASE_URL']
     
     st.markdown("---")
     
+    expiry = config.get("QR_CODE_EXPIRY_SECONDS", DEFAULT_CONFIG["QR_CODE_EXPIRY_SECONDS"])
+    st.info(f"注意：选手扫描二维码后，Token 的有效时间为 **{expiry} 秒**。")
+
     for i, checkpoint in enumerate(CHECKPOINTS):
-        # 完整的二维码链接
-        qr_link = f"{base_url}?checkpoint={checkpoint}"
+        # 为每个检查点生成一个 Token URL，该 Token 始终有效 (不需要限时，限时由选手欢迎页的生成逻辑控制)
+        # 这里我们只是展示如何构造一个包含 Token 的链接
+        temp_token = generate_timing_token(checkpoint, expiry)
+        qr_link_example = f"{base_url}?token={temp_token}"
         
         col1, col2 = st.columns([1, 4])
         
@@ -507,8 +540,8 @@ def display_timing_scanner(config):
             st.subheader(f"{checkpoint} 点")
         
         with col2:
-            st.text_area(f"【{checkpoint}】 检查点链接 (复制此链接生成二维码)", 
-                         value=qr_link,
+            st.text_area(f"【{checkpoint}】 检查点示例链接 (包含 Token)", 
+                         value=qr_link_example,
                          height=40,
                          key=f"qr_link_{checkpoint}")
 
@@ -517,9 +550,11 @@ def display_timing_scanner(config):
     st.markdown(
         """
         ---
-        ##### 如何生成二维码？
-        您可以使用任何在线的二维码生成器，将上方链接粘贴进去，即可生成二维码图片。
-        **确保二维码内容是完整的 URL。**
+        ##### 如何操作？
+        1. 复制上方示例链接（其中包含一个 Token）。
+        2. 使用在线二维码生成器生成二维码图片。
+        3. 将图片打印出来或显示在屏幕上。
+        4. **选手登录自己的账号后**，用手机自带扫码工具扫描该二维码，即可自动计时。
         """
     )
 
@@ -574,7 +609,7 @@ def display_results_ranking():
         mime="text/csv"
     )
 
-# --- 8. 页面函数：管理员数据管理 (保持不变) ---
+# --- 8. 页面函数：管理员数据管理 (集成二维码有效期配置) ---
 
 def save_system_title_callback():
     """保存系统标题和登记页标题配置"""
@@ -588,11 +623,21 @@ def save_system_title_callback():
 
 def save_url_config_callback():
     """保存 URL 和欢迎页配置"""
+    try:
+        new_expiry = int(st.session_state.new_qr_expiry)
+        if new_expiry <= 0:
+             st.error("二维码有效期必须是大于 0 的整数！")
+             return
+    except ValueError:
+        st.error("二维码有效期必须是有效的整数！")
+        return
+        
     new_config = {
         "athlete_welcome_title": st.session_state.new_welcome_title,
         "athlete_welcome_message": st.session_state.new_welcome_message,
         "athlete_sign_in_message": st.session_state.new_sign_in_message,
-        "QR_CODE_BASE_URL": st.session_state.new_base_url, 
+        "QR_CODE_BASE_URL": st.session_state.new_base_url,
+        "QR_CODE_EXPIRY_SECONDS": new_expiry, # 更新有效期
     }
     current_config = load_config()
     current_config.update(new_config)
@@ -876,6 +921,17 @@ def display_admin_data_management(config):
                     "签到提示信息 (底部蓝色提示框)",
                     value=config.get('athlete_sign_in_message', DEFAULT_CONFIG['athlete_sign_in_message']),
                     key="new_sign_in_message"
+                )
+                
+                # 新增二维码有效期配置
+                st.number_input(
+                    "Token 有效期 (秒)",
+                    value=config.get('QR_CODE_EXPIRY_SECONDS', DEFAULT_CONFIG['QR_CODE_EXPIRY_SECONDS']),
+                    min_value=10,
+                    max_value=3600, # 最大 1 小时
+                    step=10,
+                    key="new_qr_expiry",
+                    help="设置选手签到 Token 的有效时间，过期后需要重新生成。单位：秒 (S)"
                 )
 
                 st.markdown("---")
