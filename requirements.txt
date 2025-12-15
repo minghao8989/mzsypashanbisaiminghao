@@ -1,5 +1,3 @@
 streamlit
 pandas
 streamlit-webrtc
-Pillow
-pylibdmtx
