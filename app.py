@@ -6,23 +6,21 @@ import time
 import json
 import re
 
-# 导入 webrtc 组件和 OpenCV/Pyzbar 依赖
+# 导入 PIL 和 pylibdmtx 用于二维码识别
 try:
+    from PIL import Image
+    from pylibdmtx.pylibdmtx import decode as dmtx_decode
+    
+    # 导入 webrtc 组件
     from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
     import av
     import threading
     import numpy as np
-    import cv2
-    from pyzbar.pyzbar import decode
+
+    # 标记摄像头和解码库可用
     WEBRTC_AVAILABLE = True
 except ImportError:
     WEBRTC_AVAILABLE = False
-    
-    # 模拟类，防止代码崩溃
-    class DummyCV:
-        def imshow(*args, **kwargs): pass
-    cv2 = DummyCV()
-    
     class VideoProcessorBase:
         def recv(self, frame): return frame
 
@@ -278,60 +276,49 @@ def display_registration_form(config):
 
 # --- 5.5 新增：选手欢迎页面 (集成摄像头扫码逻辑) ---
 
-# 【摄像头处理类】
-class QRCodeScanner(VideoProcessorBase):
-    """WebRTC 视频帧处理器：用于检测二维码"""
+# 【摄像头处理类：使用 PIL/pylibdmtx】
+if WEBRTC_AVAILABLE:
+    class QRCodeScanner(VideoProcessorBase):
+        """WebRTC 视频帧处理器：用于检测二维码"""
 
-    def __init__(self, athlete_id):
-        self.athlete_id = athlete_id
-        self.lock = threading.Lock()
-        self.scan_result = None # 存储扫描到的检查点结果 (e.g., 'START')
-        # 计时器，防止重复快速扫描
-        self.last_scanned_time = 0
-        self.scan_cooldown = 2 # 2秒冷却时间
+        def __init__(self, athlete_id):
+            self.athlete_id = athlete_id
+            self.lock = threading.Lock()
+            self.scan_result = None 
+            self.last_scanned_time = 0
+            self.scan_cooldown = 2 # 2秒冷却时间
 
-    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        # 如果已经扫描到结果，直接返回帧
-        if self.scan_result or (time.time() - self.last_scanned_time < self.scan_cooldown):
-            return frame 
-        
-        # 将 av.VideoFrame 转换为 numpy 数组 (BGR 格式)
-        img = frame.to_ndarray(format="bgr24")
-        
-        # 转换为灰度图
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # 使用 pyzbar 解码二维码
-        decoded_objects = decode(gray)
-        
-        for obj in decoded_objects:
-            data = obj.data.decode('utf-8')
+        def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
             
-            # 提取二维码中的检查点信息 (例如：URL中的 checkpoint=START)
-            match = re.search(r'checkpoint=(\w+)', data)
-            if match:
-                checkpoint_type = match.group(1).upper()
-                if checkpoint_type in CHECKPOINTS:
-                    
-                    # 线程安全地设置结果
-                    with self.lock:
-                        self.scan_result = checkpoint_type
-                        self.last_scanned_time = time.time()
+            if self.scan_result or (time.time() - self.last_scanned_time < self.scan_cooldown):
+                # 如果已经扫描到结果或处于冷却中，直接返回帧
+                return frame 
+            
+            # 将 av.VideoFrame 转换为 PIL Image
+            img_pil = frame.to_image()
+            
+            # 使用 pylibdmtx 解码二维码
+            decoded_objects = dmtx_decode(img_pil)
+            
+            for obj in decoded_objects:
+                data = obj.data.decode('utf-8')
+                
+                # 提取二维码中的检查点信息 (例如：URL中的 checkpoint=START)
+                match = re.search(r'checkpoint=(\w+)', data)
+                if match:
+                    checkpoint_type = match.group(1).upper()
+                    if checkpoint_type in CHECKPOINTS:
                         
-                    # 绘制矩形标记扫描成功
-                    points = obj.polygon
-                    if len(points) == 4:
-                        pts = np.array(points, np.int32)
-                        pts = pts.reshape((-1, 1, 2))
-                        cv2.polylines(img, [pts], True, (0, 255, 0), 3) # 绿色
-                    
-                    # 绘制文本提示
-                    cv2.putText(img, f"Scanned: {checkpoint_type}", (50, 50), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-                    
-                    return av.VideoFrame.from_ndarray(img, format="bgr24")
+                        # 线程安全地设置结果
+                        with self.lock:
+                            self.scan_result = checkpoint_type
+                            self.last_scanned_time = time.time()
+                            
+                        # 由于 PIL 不方便绘制，这里只进行解码，不绘制图像。
+                        # 返回原始帧
+                        return frame
 
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+            return frame # 返回原始帧
 
 
 def handle_checkpoint_scan_logic(athlete_id, checkpoint_type):
@@ -411,7 +398,6 @@ def display_athlete_welcome_page(config):
     # --- 扫码状态显示 ---
     if st.session_state.scan_status == 'SUCCESS':
         st.success(st.session_state.scan_result_info)
-        # 成功后，将 show_scanner 设为 False，避免自动重新打开
         st.session_state.show_scanner = False 
         st.session_state.scan_status = None
         
@@ -421,8 +407,13 @@ def display_athlete_welcome_page(config):
         st.session_state.scan_status = None
         
     elif st.session_state.scan_status == 'SCANNING':
-        st.info("正在打开摄像头，请对准二维码进行扫描...")
-    
+        st.info("摄像头已打开，请对准二维码进行扫描...")
+        
+    elif st.session_state.scan_status == 'ERROR_INIT':
+        st.error("🚨 摄像头初始化失败！请检查权限或重试。")
+        st.session_state.show_scanner = False
+        st.session_state.scan_status = None
+
     # --- 启用/禁用摄像头按钮 ---
     if st.session_state.show_scanner:
         # 如果已显示扫描器，显示关闭按钮
@@ -431,10 +422,10 @@ def display_athlete_welcome_page(config):
             st.session_state.scan_status = None
             st.experimental_rerun()
     else:
-        # 如果未显示扫描器，显示打开按钮 (解决您的问题)
-        if st.button("▶️ 打开摄像头扫码登记"):
+        # 如果未显示扫描器，显示打开按钮
+        if st.button("▶️ 打开摄像头扫码登记", type="primary"):
             if not WEBRTC_AVAILABLE:
-                st.error("🚨 无法启用摄像头扫码功能！请联系管理员确保已安装 `streamlit-webrtc`, `opencv-python` 和 `pyzbar`。")
+                st.error("🚨 无法启用摄像头扫码功能！请联系管理员确保已安装 `streamlit-webrtc`, `Pillow` 和 `pylibdmtx`。")
                 return
 
             st.session_state.show_scanner = True
@@ -464,7 +455,6 @@ def display_athlete_welcome_page(config):
                     # 扫描到结果后，停止视频流并处理计时
                     webrtc_ctx.stop() 
                     handle_checkpoint_scan_logic(athlete_id, result)
-                    # handle_checkpoint_scan_logic 内部会触发 rerun
                     return 
             
         elif st.session_state.scan_status == 'SCANNING':
@@ -473,7 +463,13 @@ def display_athlete_welcome_page(config):
              st.session_state.scan_status = None
              st.experimental_rerun()
              return
-
+        
+        elif st.session_state.scan_status == 'IDLE' and not webrtc_ctx.state.playing:
+             # 如果用户点击了开始，但 WebRTC 无法启动 (可能是权限问题)
+             st.session_state.scan_status = 'ERROR_INIT'
+             st.experimental_rerun()
+             return
+             
     st.markdown("---")
     st.info(config['athlete_sign_in_message']) 
 
