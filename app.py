@@ -38,13 +38,13 @@ if 'login_password_input' not in st.session_state:
 
 # --- 2. 辅助函数：配置文件的加载与保存 & 权限检查 ---
 
-# 【修改点 1】新增 athlete_sign_in_message 配置项
+# 新增 athlete_sign_in_message 配置项
 DEFAULT_CONFIG = {
     "system_title": "梅州市第三人民医院赛事管理系统",
     "registration_title": "梅州市第三人民医院选手资料登记",
     "athlete_welcome_title": "恭喜您报名成功！",
     "athlete_welcome_message": "感谢您积极参加本单位的赛事活动，祝您能够取得好成绩。",
-    "athlete_sign_in_message": "请前往计时扫码终端，使用您的姓名和手机号进行比赛签到。", # 新增默认提示信息
+    "athlete_sign_in_message": "请前往计时扫码终端，使用您的姓名和手机号进行比赛签到。", 
     "users": {
         "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
@@ -281,7 +281,7 @@ def display_athlete_welcome_page(config):
     with col2:
         st.metric("签到账号 (姓名)", current_athlete['username'])
         
-    # 【修改点 3】使用新的配置变量 athlete_sign_in_message 显示提示信息
+    # 使用配置变量 athlete_sign_in_message 显示提示信息
     st.info(config['athlete_sign_in_message'])
 
 
@@ -414,18 +414,28 @@ def display_results_ranking():
 
 # --- 8. 页面函数：管理员数据管理 (Referee/SuperAdmin Access) ---
 
-def save_config_callback():
-    """【修改点 2】将表单数据保存到 config.json 文件，包含新的提示信息字段"""
+# 【修改点 A: 拆分回调函数】
+def save_system_title_callback():
+    """保存系统标题和登记页标题配置"""
     new_config = {
         "system_title": st.session_state.new_sys_title,
         "registration_title": st.session_state.new_reg_title,
-        "athlete_welcome_title": st.session_state.new_welcome_title,
-        "athlete_welcome_message": st.session_state.new_welcome_message,
-        "athlete_sign_in_message": st.session_state.new_sign_in_message, # 新增
     }
     current_config = load_config()
     current_config.update(new_config)
     save_config(current_config)
+
+def save_welcome_config_callback():
+    """保存选手欢迎页配置"""
+    new_config = {
+        "athlete_welcome_title": st.session_state.new_welcome_title,
+        "athlete_welcome_message": st.session_state.new_welcome_message,
+        "athlete_sign_in_message": st.session_state.new_sign_in_message, 
+    }
+    current_config = load_config()
+    current_config.update(new_config)
+    save_config(current_config)
+# -----------------------------
 
 def display_user_management(config):
     """超级管理员独有：用户和权限管理页面"""
@@ -666,7 +676,8 @@ def display_admin_data_management(config):
             st.subheader("⚙️ 系统标题与登记页配置修改")
             st.info("修改以下配置项后，点击保存，系统将自动重新加载以应用新标题。")
 
-            with st.form("config_form"):
+            # 【修改点 B: 仅包含系统标题配置的表单】
+            with st.form("config_form"): 
                 st.text_input(
                     "系统主标题 (侧边栏顶部和计时页面)",
                     value=config['system_title'],
@@ -679,7 +690,8 @@ def display_admin_data_management(config):
                     key="new_reg_title"
                 )
 
-                if st.form_submit_button("✅ 保存并应用配置", on_click=save_config_callback):
+                # 【修改点 C: 绑定到 save_system_title_callback】
+                if st.form_submit_button("✅ 保存并应用配置", on_click=save_system_title_callback): 
                     st.success("配置已保存！系统正在重新加载...")
                     time.sleep(1)
                     st.experimental_rerun()
@@ -688,6 +700,7 @@ def display_admin_data_management(config):
             st.subheader("📝 选手登录成功后提示信息配置")
             st.info("配置选手使用账号密码登录成功后，在‘选手欢迎页’中显示的标题和说明文字。")
             
+            # 【修改点 D: 仅包含欢迎页配置的表单】
             with st.form("welcome_config_form"):
                 st.text_input(
                     "欢迎页标题 (第一栏)",
@@ -700,14 +713,14 @@ def display_admin_data_management(config):
                     key="new_welcome_message"
                 )
                 
-                # 【修改点 4】新增签到提示配置输入框
                 st.text_input(
                     "签到提示信息 (底部蓝色提示框)",
                     value=config.get('athlete_sign_in_message', DEFAULT_CONFIG['athlete_sign_in_message']),
                     key="new_sign_in_message"
                 )
                 
-                if st.form_submit_button("✅ 保存欢迎页配置", on_click=save_config_callback):
+                # 【修改点 E: 绑定到 save_welcome_config_callback】
+                if st.form_submit_button("✅ 保存欢迎页配置", on_click=save_welcome_config_callback):
                     st.success("欢迎页配置已保存！")
                     time.sleep(1)
                     st.experimental_rerun()
