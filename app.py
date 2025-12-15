@@ -38,11 +38,13 @@ if 'login_password_input' not in st.session_state:
 
 # --- 2. 辅助函数：配置文件的加载与保存 & 权限检查 ---
 
+# 【修改点 1】新增 athlete_sign_in_message 配置项
 DEFAULT_CONFIG = {
     "system_title": "梅州市第三人民医院赛事管理系统",
     "registration_title": "梅州市第三人民医院选手资料登记",
     "athlete_welcome_title": "恭喜您报名成功！",
     "athlete_welcome_message": "感谢您积极参加本单位的赛事活动，祝您能够取得好成绩。",
+    "athlete_sign_in_message": "请前往计时扫码终端，使用您的姓名和手机号进行比赛签到。", # 新增默认提示信息
     "users": {
         "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
@@ -59,6 +61,7 @@ def load_config():
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
+            # 确保加载的配置包含所有默认字段
             return {**DEFAULT_CONFIG, **config, 
                     'users': {**DEFAULT_CONFIG.get('users', {}), **config.get('users', {})}}
     except Exception:
@@ -177,7 +180,7 @@ def display_registration_form(config):
 
     st.info("请准确填写以下信息。**您的姓名为账号，手机号为密码。**")
     
-    # 【核心修复】使用 clear_on_submit=True 自动清理表单输入，并避免在表单组件中使用 key 属性来规避 Streamlit 的潜在状态冲突
+    # 使用 clear_on_submit=True 自动清理表单输入
     with st.form("registration_form", clear_on_submit=True): 
         
         # 不使用 key 属性
@@ -239,7 +242,6 @@ def display_registration_form(config):
                 请前往 **选手登录** 页面使用此信息登录，查看您的信息。
             """)
             
-            # 提交成功，表单自动清空，然后重新运行
             time.sleep(1)
             st.experimental_rerun()
 
@@ -253,7 +255,7 @@ def display_athlete_welcome_page(config):
         
     st.header(f"🎉 {config['athlete_welcome_title']}")
     
-    # 自定义消息显示
+    # 自定义消息显示 (欢迎语)
     st.markdown(f"""
         <div style="padding: 15px; border-radius: 5px; background-color: #f0f2f6; border-left: 5px solid #00c0f2;">
             <p style="font-size: 1.1em; margin: 0;">{config['athlete_welcome_message']}</p>
@@ -279,7 +281,8 @@ def display_athlete_welcome_page(config):
     with col2:
         st.metric("签到账号 (姓名)", current_athlete['username'])
         
-    st.info("请前往**计时扫码**终端，使用您的姓名和手机号进行比赛签到。")
+    # 【修改点 3】使用新的配置变量 athlete_sign_in_message 显示提示信息
+    st.info(config['athlete_sign_in_message'])
 
 
 # --- 6. 页面函数：计时扫码 (Referee/SuperAdmin Access) ---
@@ -412,12 +415,13 @@ def display_results_ranking():
 # --- 8. 页面函数：管理员数据管理 (Referee/SuperAdmin Access) ---
 
 def save_config_callback():
-    """将表单数据保存到 config.json 文件"""
+    """【修改点 2】将表单数据保存到 config.json 文件，包含新的提示信息字段"""
     new_config = {
         "system_title": st.session_state.new_sys_title,
         "registration_title": st.session_state.new_reg_title,
         "athlete_welcome_title": st.session_state.new_welcome_title,
         "athlete_welcome_message": st.session_state.new_welcome_message,
+        "athlete_sign_in_message": st.session_state.new_sign_in_message, # 新增
     }
     current_config = load_config()
     current_config.update(new_config)
@@ -694,6 +698,13 @@ def display_admin_data_management(config):
                     "欢迎页说明文字 (第二栏)",
                     value=config['athlete_welcome_message'],
                     key="new_welcome_message"
+                )
+                
+                # 【修改点 4】新增签到提示配置输入框
+                st.text_input(
+                    "签到提示信息 (底部蓝色提示框)",
+                    value=config.get('athlete_sign_in_message', DEFAULT_CONFIG['athlete_sign_in_message']),
+                    key="new_sign_in_message"
                 )
                 
                 if st.form_submit_button("✅ 保存欢迎页配置", on_click=save_config_callback):
