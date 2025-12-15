@@ -1,6 +1,4 @@
 streamlit
-flask
-# 如果你的应用中还使用了其他库，也需要添加，例如：
-# numpy
-# pandas
-# requests
+pandas
+qrcode
+itsdangerous
