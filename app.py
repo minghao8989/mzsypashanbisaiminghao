@@ -5,6 +5,9 @@ from datetime import datetime
 import time
 import json
 import re
+import qrcode # 新增依赖：用于生成二维码
+from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadTimeSignature # 新增依赖：用于生成限时安全Token
+import io
 
 # --- 1. 配置和数据文件定义 & 常量 ---
 
@@ -15,6 +18,13 @@ CONFIG_FILE = 'config.json'
 LOGIN_PAGE = "系统用户登录"
 ATHLETE_LOGIN_PAGE = "选手登录"
 ATHLETE_WELCOME_PAGE = "选手欢迎页"
+
+# Token 加密密钥和签名器定义
+# 【重要】请在生产环境中将 SECRET_KEY 替换为随机生成的安全字符串
+SECRET_KEY = os.environ.get("STREAMLIT_SECRET_KEY", "your_insecure_default_secret_key_12345")
+# 初始化 Token 序列化器
+def get_serializer(key):
+    return URLSafeTimedSerializer(key)
 
 # 初始化 Session State
 if 'logged_in' not in st.session_state:
@@ -38,13 +48,14 @@ if 'login_password_input' not in st.session_state:
 
 # --- 2. 辅助函数：配置文件的加载与保存 & 权限检查 ---
 
-# 新增 athlete_sign_in_message 配置项
+# 新增 QR_CODE_EXPIRY_SECONDS 配置项
 DEFAULT_CONFIG = {
     "system_title": "梅州市第三人民医院赛事管理系统",
     "registration_title": "梅州市第三人民医院选手资料登记",
     "athlete_welcome_title": "恭喜您报名成功！",
     "athlete_welcome_message": "感谢您积极参加本单位的赛事活动，祝您能够取得好成绩。",
-    "athlete_sign_in_message": "请前往计时扫码终端，使用您的姓名和手机号进行比赛签到。", 
+    "athlete_sign_in_message": "请点击下方按钮生成您的限时签到二维码。", # 修改默认提示
+    "QR_CODE_EXPIRY_SECONDS": 90, # 默认二维码有效期 90 秒
     "users": {
         "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
@@ -82,7 +93,7 @@ def check_permission(required_roles):
     return current_role in required_roles
 
 
-# --- 3. 辅助函数：文件加载与保存 ---
+# --- 3. 辅助函数：文件加载与保存 (保持不变) ---
 
 def load_athletes_data():
     """加载选手资料文件，新增 'username' 和 'password' 列。"""
@@ -123,7 +134,7 @@ def save_records_data(df):
     """保存计时数据到 CSV (使用 utf-8-sig 编码防乱码)"""
     df.to_csv(RECORDS_FILE, index=False, encoding='utf-8-sig')
 
-# --- 4. 核心计算与格式化函数 (保持一致) ---
+# --- 4. 核心计算与格式化函数 (保持不变) ---
 
 def calculate_net_time(df_records):
     """根据扫码记录计算每位选手的总用时和分段用时。"""
@@ -163,7 +174,7 @@ def format_time(seconds):
     return f"{minutes:02d}:{remaining_seconds:06.3f}"
 
 
-# --- 5. 页面函数：选手登记 (Public/Referee Access) ---
+# --- 5. 页面函数：选手登记 (保持不变) ---
 
 def display_registration_form(config):
     """选手资料登记页面"""
@@ -246,7 +257,33 @@ def display_registration_form(config):
             st.experimental_rerun()
 
 
-# --- 5.5 新增：选手欢迎页面 ---
+# --- 5.5 新增：选手欢迎页面 (集成二维码生成) ---
+
+def generate_athlete_token(athlete_id, expiry_seconds):
+    """为指定选手生成一个限时的安全Token"""
+    s = get_serializer(SECRET_KEY)
+    # Token 包含选手 ID 和一个随机时间戳，以确保唯一性
+    data = {'id': athlete_id, 'ts': datetime.now().timestamp()}
+    return s.dumps(data, salt='athlete-timing-token')
+
+def generate_qr_code_image(token):
+    """生成包含 Token 的 QR 码图像，并返回字节流"""
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(token)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # 将图像保存到内存中的字节流
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
 def display_athlete_welcome_page(config):
     """选手登录成功后显示的欢迎页面"""
     if not st.session_state.athlete_logged_in:
@@ -255,7 +292,6 @@ def display_athlete_welcome_page(config):
         
     st.header(f"🎉 {config['athlete_welcome_title']}")
     
-    # 自定义消息显示 (欢迎语)
     st.markdown(f"""
         <div style="padding: 15px; border-radius: 5px; background-color: #f0f2f6; border-left: 5px solid #00c0f2;">
             <p style="font-size: 1.1em; margin: 0;">{config['athlete_welcome_message']}</p>
@@ -263,33 +299,75 @@ def display_athlete_welcome_page(config):
     """, unsafe_allow_html=True)
     
     st.markdown("---")
-    st.subheader("您的签到凭证")
     
-    # 查找当前登录选手的信息
     df_athletes = load_athletes_data()
-    current_athlete = df_athletes[df_athletes['username'] == st.session_state.athlete_username]
-    
-    if current_athlete.empty:
-        st.error("错误：未找到该选手信息。请联系管理员。")
-        return
-        
-    current_athlete = current_athlete.iloc[0]
+    current_athlete = df_athletes[df_athletes['username'] == st.session_state.athlete_username].iloc[0]
+    athlete_id = current_athlete['athlete_id']
     
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("您的比赛编号", current_athlete['athlete_id'])
+        st.metric("您的比赛编号", athlete_id)
     with col2:
         st.metric("签到账号 (姓名)", current_athlete['username'])
+
+    st.subheader("🎟️ 计时签到二维码")
+    st.info(f"{config['athlete_sign_in_message']} (二维码有效期: {config['QR_CODE_EXPIRY_SECONDS']} 秒)")
+
+    # 1. 生成 Token 和二维码
+    expiry_seconds = config['QR_CODE_EXPIRY_SECONDS']
+    
+    # 使用 Session State 存储二维码相关信息，避免每次 Rerun 都生成新 Token
+    if 'current_athlete_qr' not in st.session_state or st.session_state.current_athlete_qr.get('id') != athlete_id:
+        st.session_state.current_athlete_qr = {'id': None, 'token': None, 'generated_at': None}
+
+    def generate_new_qr():
+        token = generate_athlete_token(athlete_id, expiry_seconds)
+        st.session_state.current_athlete_qr = {
+            'id': athlete_id,
+            'token': token,
+            'generated_at': time.time(),
+            'expiry': expiry_seconds
+        }
+
+    # 首次加载或选手切换时生成
+    if st.session_state.current_athlete_qr['token'] is None:
+        generate_new_qr()
+        st.experimental_rerun() # 重新运行以显示二维码
+
+    # 检查二维码是否过期
+    is_expired = (time.time() - st.session_state.current_athlete_qr['generated_at']) > expiry_seconds
+    
+    if is_expired:
+        st.warning("当前二维码已过期，请点击下方按钮重新生成！")
+        if st.button("🔄 重新生成限时二维码"):
+            generate_new_qr()
+            st.experimental_rerun()
+    else:
+        # 显示二维码
+        qr_image_bytes = generate_qr_code_image(st.session_state.current_athlete_qr['token'])
         
-    # 使用配置变量 athlete_sign_in_message 显示提示信息
-    st.info(config['athlete_sign_in_message'])
+        # 使用列布局美化显示
+        qr_col, info_col = st.columns([1, 2])
+        
+        with qr_col:
+            st.image(qr_image_bytes, caption=f"限时签到码 (有效期 {expiry_seconds} 秒)", width=250)
+            
+        with info_col:
+            remaining_time = expiry_seconds - (time.time() - st.session_state.current_athlete_qr['generated_at'])
+            st.metric("剩余有效时间", f"{int(remaining_time)} 秒")
+            st.code(st.session_state.current_athlete_qr['token'][:20] + "...")
+            st.markdown("*请将此二维码展示给裁判进行计时签到。*")
+
+        # 自动刷新页面以更新剩余时间 (如果需要)
+        # time.sleep(1) 
+        # st.experimental_rerun() # 避免频繁 Rerun 影响性能，手动刷新即可
 
 
-# --- 6. 页面函数：计时扫码 (Referee/SuperAdmin Access) ---
+# --- 6. 页面函数：计时扫码 (裁判使用 Token 模式) ---
 
 def display_timing_scanner(config):
     """
-    计时扫码页面改为使用选手的账号(姓名)和密码(手机号)进行签到验证。
+    计时扫码页面改为使用 Token (二维码内容) 进行签到验证。
     """
     
     if not check_permission(["SuperAdmin", "Referee"]):
@@ -304,33 +382,45 @@ def display_timing_scanner(config):
 
     st.header(f"⏱️ {config['system_title'].replace('赛事管理系统', '').strip()} {checkpoint_type} 计时签到")
     st.subheader(f"当前检查点: {checkpoint_type}")
-    st.info("选手请使用 **姓名** 作为账号，**手机号** 作为密码进行签到。")
+    st.warning("请使用扫码枪扫描选手手机上显示的 **限时二维码**。")
 
     with st.form("timing_form", clear_on_submit=True):
-        athlete_username = st.text_input("账号 (姓名)", key="scan_username").strip()
-        athlete_password = st.text_input("密码 (手机号)", type="password", key="scan_password").strip()
+        # 接收扫码枪读取的 Token 字符串
+        scanned_token = st.text_input("Token / 扫码枪输入", help="粘贴或扫码枪输入二维码内容", key="scan_token").strip()
         
         submitted = st.form_submit_button(f"提交 {checkpoint_type} 签到")
 
         if submitted:
-            if not athlete_username or not athlete_password:
-                st.error("请输入完整的账号和密码。")
+            if not scanned_token:
+                st.error("请输入或扫描 Token。")
+                return
+            
+            # 1. 验证 Token
+            s = get_serializer(SECRET_KEY)
+            athlete_id = None
+            
+            try:
+                # 尝试解密 Token，同时验证签名和过期时间
+                data = s.loads(scanned_token, salt='athlete-timing-token', max_age=config['QR_CODE_EXPIRY_SECONDS'])
+                athlete_id = data['id']
+            except SignatureExpired:
+                st.error("签到失败：二维码已过期，请让选手重新生成！")
+                return
+            except BadTimeSignature:
+                st.error("签到失败：Token 无效或被篡改，请确认扫描了正确的二维码。")
+                return
+            except Exception as e:
+                st.error(f"签到失败：Token 解析错误。请联系管理员。")
                 return
 
+            # 2. 验证选手信息
             df_athletes = load_athletes_data()
-            
-            # 1. 验证账号和密码
-            verified_athlete = df_athletes[
-                (df_athletes['username'] == athlete_username) & 
-                (df_athletes['password'] == athlete_password)
-            ]
+            verified_athlete = df_athletes[df_athletes['athlete_id'] == athlete_id]
             
             if verified_athlete.empty:
-                st.error(f"账号或密码错误，请检查您的姓名和手机号是否正确。")
+                st.error(f"签到失败：Token 中包含的选手编号 {athlete_id} 无效。")
                 return
             
-            # 2. 获取选手信息
-            athlete_id = verified_athlete['athlete_id'].iloc[0]
             name = verified_athlete['name'].iloc[0]
 
             # 3. 检查是否重复扫码
@@ -362,7 +452,7 @@ def display_timing_scanner(config):
             st.experimental_rerun()
 
 
-# --- 7. 页面函数：排名结果 (Leader/SuperAdmin Access) ---
+# --- 7. 页面函数：排名结果 (保持不变) ---
 
 def display_results_ranking():
     """结果统计与排名页面"""
@@ -412,9 +502,8 @@ def display_results_ranking():
         mime="text/csv"
     )
 
-# --- 8. 页面函数：管理员数据管理 (Referee/SuperAdmin Access) ---
+# --- 8. 页面函数：管理员数据管理 (集成二维码有效期配置) ---
 
-# 【修改点 A: 拆分回调函数】
 def save_system_title_callback():
     """保存系统标题和登记页标题配置"""
     new_config = {
@@ -426,19 +515,30 @@ def save_system_title_callback():
     save_config(current_config)
 
 def save_welcome_config_callback():
-    """保存选手欢迎页配置"""
+    """保存选手欢迎页配置和二维码有效期"""
+    # 确保有效期是整数且为正数
+    try:
+        new_expiry = int(st.session_state.new_qr_expiry)
+        if new_expiry <= 0:
+             st.error("二维码有效期必须是大于 0 的整数！")
+             return
+    except ValueError:
+        st.error("二维码有效期必须是有效的整数！")
+        return
+        
     new_config = {
         "athlete_welcome_title": st.session_state.new_welcome_title,
         "athlete_welcome_message": st.session_state.new_welcome_message,
-        "athlete_sign_in_message": st.session_state.new_sign_in_message, 
+        "athlete_sign_in_message": st.session_state.new_sign_in_message,
+        "QR_CODE_EXPIRY_SECONDS": new_expiry, # 更新有效期
     }
     current_config = load_config()
     current_config.update(new_config)
     save_config(current_config)
-# -----------------------------
+
 
 def display_user_management(config):
-    """超级管理员独有：用户和权限管理页面"""
+    """超级管理员独有：用户和权限管理页面 (保持不变)"""
     
     if not check_permission(["SuperAdmin"]):
         st.error("您没有权限访问用户管理页面。")
@@ -676,7 +776,6 @@ def display_admin_data_management(config):
             st.subheader("⚙️ 系统标题与登记页配置修改")
             st.info("修改以下配置项后，点击保存，系统将自动重新加载以应用新标题。")
 
-            # 【修改点 B: 仅包含系统标题配置的表单】
             with st.form("config_form"): 
                 st.text_input(
                     "系统主标题 (侧边栏顶部和计时页面)",
@@ -690,7 +789,6 @@ def display_admin_data_management(config):
                     key="new_reg_title"
                 )
 
-                # 【修改点 C: 绑定到 save_system_title_callback】
                 if st.form_submit_button("✅ 保存并应用配置", on_click=save_system_title_callback): 
                     st.success("配置已保存！系统正在重新加载...")
                     time.sleep(1)
@@ -698,9 +796,8 @@ def display_admin_data_management(config):
         
         elif config_option == "选手欢迎页配置":
             st.subheader("📝 选手登录成功后提示信息配置")
-            st.info("配置选手使用账号密码登录成功后，在‘选手欢迎页’中显示的标题和说明文字。")
+            st.info("配置选手登录后显示的标题、说明文字，以及签到二维码的有效期。")
             
-            # 【修改点 D: 仅包含欢迎页配置的表单】
             with st.form("welcome_config_form"):
                 st.text_input(
                     "欢迎页标题 (第一栏)",
@@ -719,7 +816,17 @@ def display_admin_data_management(config):
                     key="new_sign_in_message"
                 )
                 
-                # 【修改点 E: 绑定到 save_welcome_config_callback】
+                # 新增二维码有效期配置
+                st.number_input(
+                    "二维码有效期 (秒)",
+                    value=config.get('QR_CODE_EXPIRY_SECONDS', DEFAULT_CONFIG['QR_CODE_EXPIRY_SECONDS']),
+                    min_value=10,
+                    max_value=3600, # 最大 1 小时
+                    step=10,
+                    key="new_qr_expiry",
+                    help="设置选手签到二维码的有效时间，过期后需要重新生成。单位：秒 (S)"
+                )
+                
                 if st.form_submit_button("✅ 保存欢迎页配置", on_click=save_welcome_config_callback):
                     st.success("欢迎页配置已保存！")
                     time.sleep(1)
@@ -730,7 +837,7 @@ def display_admin_data_management(config):
             display_user_management(config)
 
 
-# --- 9. 页面函数：归档与重置 (SuperAdmin Access) ---
+# --- 9. 页面函数：归档与重置 (保持不变) ---
 
 def archive_and_reset_race_data():
     """将当前数据归档，并清空活动文件以便开始新的比赛。"""
@@ -849,7 +956,7 @@ def display_archive_reset():
         st.error(f"加载历史数据时发生错误：{e}")
 
 
-# --- 10. 页面函数：用户登录与登出 ---
+# --- 10. 页面函数：用户登录与登出 (保持不变) ---
 
 def set_login_success(config):
     """设置管理员/裁判/领导的登录状态"""
@@ -879,6 +986,8 @@ def set_athlete_login_success():
     if not verified_athlete.empty:
         st.session_state.athlete_logged_in = True
         st.session_state.athlete_username = athlete_username
+        # 重置 QR 状态，确保新选手登录后能生成新码
+        st.session_state.current_athlete_qr = {'id': None, 'token': None, 'generated_at': None} 
     else:
         st.session_state.athlete_logged_in = False
         st.session_state.athlete_username = None
@@ -966,6 +1075,7 @@ def display_athlete_logout_button():
         st.session_state.athlete_logged_in = False
         st.session_state.athlete_username = None
         st.session_state.page_selection = "选手登记"
+        st.session_state.current_athlete_qr = {'id': None, 'token': None, 'generated_at': None} # 退出时清除 QR 状态
         
     if st.sidebar.button("退出选手账号", on_click=set_athlete_logout):
         st.experimental_rerun()
