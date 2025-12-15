@@ -1,5 +1,5 @@
 streamlit
 pandas
 streamlit-webrtc
-opencv-python
-pyzbar
+Pillow
+pylibdmtx
