@@ -35,9 +35,11 @@ CHECKPOINTS = ['START', 'MID', 'FINISH'] # 定义检查点类型
 
 # Session State 变量用于二维码状态管理
 if 'current_qr' not in st.session_state:
-    st.session_state.current_qr = {'token': None, 'generated_at': 0, 'expiry': 0}
-if 'qr_placeholder' not in st.session_state:
-    st.session_state.qr_placeholder = None
+    # Token 只包含检查点类型，方便管理员选择
+    st.session_state.current_qr = {'token': None, 'generated_at': 0, 'expiry': 0, 'checkpoint': CHECKPOINTS[0]}
+if 'show_manual_scan_info' not in st.session_state:
+    st.session_state.show_manual_scan_info = False
+
 
 # 初始化 Session State (保持不变)
 if 'logged_in' not in st.session_state:
@@ -66,8 +68,8 @@ DEFAULT_CONFIG = {
     "registration_title": "梅州市第三人民医院选手资料登记",
     "athlete_welcome_title": "恭喜您报名成功！",
     "athlete_welcome_message": "感谢您积极参加本单位的赛事活动，祝您能够取得好成绩。",
-    "athlete_sign_in_message": "请使用您的手机（保持已登录状态）扫描下方的限时二维码进行计时登记。", 
-    "QR_CODE_BASE_URL": "http://127.0.0.1:8501", # 【重要】部署后需修改为您的 Streamlit 公网地址
+    "athlete_sign_in_message": "请点击下方按钮，使用手机自带的扫码功能扫描管理员提供的二维码进行计时登记。", 
+    "QR_CODE_BASE_URL": "http://127.0.0.1:8501", 
     "QR_CODE_EXPIRY_SECONDS": 90, # 二维码默认有效期 90 秒
     "users": {
         "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
@@ -338,29 +340,6 @@ def handle_timing_record(athlete_id, checkpoint_type):
     st.experimental_rerun()
 
 
-def generate_new_qr(config, current_athlete):
-    """生成新的限时二维码并存储在 Session State"""
-    athlete_id = current_athlete['athlete_id']
-    expiry_seconds = config['QR_CODE_EXPIRY_SECONDS']
-    
-    # 我们为所有检查点生成一个通用的 Token，Token 只包含检查点类型
-    checkpoint_type = st.session_state.get('qr_checkpoint_select', CHECKPOINTS[0])
-    
-    # 生成 Token
-    token = generate_timing_token(checkpoint_type, expiry_seconds)
-    
-    # Token URL: 选手扫描后，手机打开这个链接，应用会捕获 token 参数
-    token_url = f"{config['QR_CODE_BASE_URL']}?token={token}"
-    
-    st.session_state.current_qr = {
-        'token': token,
-        'generated_at': time.time(),
-        'expiry': expiry_seconds,
-        'url': token_url,
-        'checkpoint': checkpoint_type,
-    }
-
-
 def display_athlete_welcome_page(config):
     """选手登录成功后显示的欢迎页面"""
     if not st.session_state.athlete_logged_in:
@@ -450,45 +429,120 @@ def display_athlete_welcome_page(config):
         st.warning(st.session_state.scan_result_info)
         st.session_state.scan_status = None
     
+    
+    # --- 按钮和提示：解决“打开摄像头扫码”的需求 ---
+    
+    if st.button("▶️ 打开摄像头扫码登记", type="primary"):
+        # 用户点击按钮后，将状态设置为显示提示
+        st.session_state.show_manual_scan_info = True
+        st.experimental_rerun()
+        return
+
+    if st.session_state.show_manual_scan_info:
+        st.markdown("---")
+        
+        # 弹出的提示信息，指导用户操作
+        st.warning(
+            """
+            📱 **请使用您的手机自带的扫码功能：**
+            由于系统环境限制，我们无法直接调用摄像头。
+            
+            1. **扫描：** 请打开您手机**自带的扫码应用**（如微信、手机相机等）。
+            2. **对准：** 扫描管理员在场边提供的**检查点二维码**。
+            3. **跳转：** 手机会自动跳转回此页面完成计时！
+            """
+        )
+        
+        # 计时完成后自动关闭提示
+        if st.button("知道了 / 关闭提示"):
+            st.session_state.show_manual_scan_info = False
+            st.experimental_rerun()
+            return
+
+    st.markdown("---")
     st.info(config['athlete_sign_in_message']) 
+    st.warning("⚠️ 扫码成功后，页面将自动刷新并显示 **签到成功** 信息。")
+
+
+# --- 6. 页面函数：计时扫码 (管理员生成限时二维码) ---
+
+def display_timing_scanner(config):
+    """
+    管理员生成限时二维码，包含 Token。
+    """
     
-    # --- 二维码生成和显示逻辑 ---
+    if not check_permission(["SuperAdmin", "Referee"]):
+        st.error("您没有权限访问计时扫码终端。")
+        return
+
+    st.header(f"⏱️ 比赛检查点限时二维码生成")
+    st.subheader("请选择检查点，生成限时二维码供选手扫描。")
     
-    # 1. 选择要签到的检查点
-    st.selectbox("选择要签到的检查点", CHECKPOINTS, key='qr_checkpoint_select', index=0)
+    # 1. 选择要生成二维码的检查点
+    selected_checkpoint = st.selectbox("选择要生成的检查点二维码", CHECKPOINTS, key='admin_qr_checkpoint_select')
     
     # 2. 检查二维码状态 (如果是首次加载，或者Token已过期，或者检查点被切换，则生成新的)
-    current_time = time.time()
-    qr_data = st.session_state.current_qr
-    is_expired = (current_time - qr_data['generated_at']) > qr_data['expiry']
+    current_qr_admin = st.session_state.current_qr
     
-    if is_expired or qr_data['token'] is None or qr_data['checkpoint'] != st.session_state.qr_checkpoint_select:
-        generate_new_qr(config, current_athlete)
-        qr_data = st.session_state.current_qr # 更新数据
+    # 确定当前时间
+    current_time = time.time()
+    
+    # 检查当前存储的 Token 是否属于当前管理员选择的检查点
+    is_mismatch = current_qr_admin['checkpoint'] != selected_checkpoint
+    is_expired = (current_time - current_qr_admin['generated_at']) > current_qr_admin['expiry']
+
+    if is_expired or current_qr_admin['token'] is None or is_mismatch:
+        # 重新生成 Token
+        expiry_seconds = config['QR_CODE_EXPIRY_SECONDS']
+        token = generate_timing_token(selected_checkpoint, expiry_seconds)
+        token_url = f"{config['QR_CODE_BASE_URL']}?token={token}"
         
-    # 3. 显示二维码和倒计时
+        st.session_state.current_qr = {
+            'token': token,
+            'generated_at': current_time,
+            'expiry': expiry_seconds,
+            'url': token_url,
+            'checkpoint': selected_checkpoint,
+        }
+        # 强制刷新以显示新二维码
+        st.experimental_rerun()
+        return
+
+    # 3. 显示当前二维码和倒计时
+    qr_data = st.session_state.current_qr
     expiry_seconds = qr_data['expiry']
     remaining_time = expiry_seconds - (current_time - qr_data['generated_at'])
     
+    st.markdown("---")
+    st.success(f"✅ **{qr_data['checkpoint']} 检查点** 限时二维码已生成！")
+
     qr_col, info_col = st.columns([1, 2])
     
     with qr_col:
         # 显示二维码图片
         qr_image_bytes = generate_qr_code_image(qr_data['url'])
         st.image(qr_image_bytes, 
-                 caption=f"{qr_data['checkpoint']} 检查点限时码", 
+                 caption=f"请显示此二维码 ({qr_data['checkpoint']})", 
                  width=250)
         
     with info_col:
         st.metric("二维码剩余有效时间", f"{int(remaining_time)} 秒")
-        if remaining_time <= 10:
-             st.warning("二维码即将过期，请尽快扫码！")
         
-        # 强制刷新按钮
-        if st.button("🔄 立即重新生成二维码"):
-            generate_new_qr(config, current_athlete)
+        if remaining_time <= 10:
+             st.warning("二维码即将过期，请尽快通知选手扫描！")
+        
+        # 强制刷新按钮 (如果需要立即更换或续期)
+        if st.button("🔄 立即重新生成/续期二维码"):
+            # 简单地触发重新生成逻辑
+            st.session_state.current_qr['generated_at'] = 0 
             st.experimental_rerun()
             return
+        
+        st.markdown("---")
+        st.markdown(f"**二维码内容 (Token URL):**")
+        st.code(qr_data['url'])
+        st.warning("请将此二维码显示在屏幕上或打印出来供选手扫描。")
+
 
     # 倒计时逻辑：当剩余时间小于 1 秒时，强制刷新页面以生成新的二维码
     if remaining_time <= 1:
@@ -497,66 +551,6 @@ def display_athlete_welcome_page(config):
     # 自动刷新：为了显示倒计时，使用 time.sleep 暂停并重新运行
     time.sleep(1)
     st.experimental_rerun()
-
-
-# --- 6. 页面函数：计时扫码 (裁判提供二维码链接) ---
-
-def display_timing_scanner(config):
-    """
-    管理员/裁判查看二维码链接，用于生成并打印二维码。
-    """
-    
-    if not check_permission(["SuperAdmin", "Referee"]):
-        st.error("您没有权限访问计时扫码终端。")
-        return
-
-    st.header(f"⏱️ 比赛检查点二维码生成")
-    st.subheader("请将以下链接生成二维码，供选手用已登录手机扫描。")
-    
-    st.warning("此页面仅用于查看**通用链接**，选手扫码后将自动跳转回选手欢迎页完成计时。")
-    
-    st.markdown("""
-    **🚨 部署提示：**
-    - 部署后，请务必在 **数据管理 -> 系统配置** 中将 **基本应用链接** (`QR_CODE_BASE_URL`) 修改为您的公网地址或域名。
-    - 当前基本链接为：`{}`
-    """.format(config['QR_CODE_BASE_URL']))
-
-    base_url = config['QR_CODE_BASE_URL']
-    
-    st.markdown("---")
-    
-    expiry = config.get("QR_CODE_EXPIRY_SECONDS", DEFAULT_CONFIG["QR_CODE_EXPIRY_SECONDS"])
-    st.info(f"注意：选手扫描二维码后，Token 的有效时间为 **{expiry} 秒**。")
-
-    for i, checkpoint in enumerate(CHECKPOINTS):
-        # 为每个检查点生成一个 Token URL，该 Token 始终有效 (不需要限时，限时由选手欢迎页的生成逻辑控制)
-        # 这里我们只是展示如何构造一个包含 Token 的链接
-        temp_token = generate_timing_token(checkpoint, expiry)
-        qr_link_example = f"{base_url}?token={temp_token}"
-        
-        col1, col2 = st.columns([1, 4])
-        
-        with col1:
-            st.subheader(f"{checkpoint} 点")
-        
-        with col2:
-            st.text_area(f"【{checkpoint}】 检查点示例链接 (包含 Token)", 
-                         value=qr_link_example,
-                         height=40,
-                         key=f"qr_link_{checkpoint}")
-
-        st.markdown("---")
-        
-    st.markdown(
-        """
-        ---
-        ##### 如何操作？
-        1. 复制上方示例链接（其中包含一个 Token）。
-        2. 使用在线二维码生成器生成二维码图片。
-        3. 将图片打印出来或显示在屏幕上。
-        4. **选手登录自己的账号后**，用手机自带扫码工具扫描该二维码，即可自动计时。
-        """
-    )
 
 
 # --- 7. 页面函数：排名结果 (保持不变) ---
@@ -622,7 +616,7 @@ def save_system_title_callback():
     save_config(current_config)
 
 def save_url_config_callback():
-    """保存 URL 和欢迎页配置"""
+    """保存 URL 和欢迎页配置，并处理有效期"""
     try:
         new_expiry = int(st.session_state.new_qr_expiry)
         if new_expiry <= 0:
@@ -642,6 +636,9 @@ def save_url_config_callback():
     current_config = load_config()
     current_config.update(new_config)
     save_config(current_config)
+    
+    # 强制让 Token 失效，以便下次访问时生成新 Token
+    st.session_state.current_qr['generated_at'] = 0 
 
 
 def display_user_management(config):
@@ -1192,7 +1189,7 @@ def display_athlete_logout_button():
         st.session_state.athlete_logged_in = False
         st.session_state.athlete_username = None
         st.session_state.page_selection = "选手登记"
-        st.session_state.show_scanner = False
+        st.session_state.show_manual_scan_info = False
         st.session_state.scan_status = None
         
     if st.sidebar.button("退出选手账号", on_click=set_athlete_logout):
