@@ -7,21 +7,24 @@ import json
 import re
 
 # --- 导入安全 Token 和二维码生成库 ---
-# 检查依赖是否安装
 try:
     from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadTimeSignature
     import qrcode
     import io
-    TOKEN_AVAILABLE = True
+    # 尝试生成一个实例来确认库是否可用
+    try:
+        URLSafeTimedSerializer(os.environ.get("STREAMLIT_SECRET_KEY", "test_key"))
+        TOKEN_AVAILABLE = True
+    except:
+        TOKEN_AVAILABLE = False
 except ImportError:
-    # 如果库未安装，禁用二维码功能并给出警告
+    # 如果库未安装，禁用二维码功能
     TOKEN_AVAILABLE = False
     
 # Token 加密密钥和签名器定义
-# 【修复点 1】确保 SECRET_KEY 存在
 SECRET_KEY = os.environ.get("STREAMLIT_SECRET_KEY", "your_insecure_default_secret_key_12345")
 
-# 【修复点 2】将 Serializer 实例移到 get_serializer 函数内部
+# 【修复点】确保 Serializer 实例只在可用时创建
 def get_serializer(key):
     if not TOKEN_AVAILABLE:
         return None
@@ -37,9 +40,9 @@ CONFIG_FILE = 'config.json'
 LOGIN_PAGE = "系统用户登录"
 ATHLETE_LOGIN_PAGE = "选手登录"
 ATHLETE_WELCOME_PAGE = "选手欢迎页"
-CHECKPOINTS = ['START', 'MID', 'FINISH'] # 定义检查点类型
+CHECKPOINTS = ['START', 'MID', 'FINISH'] 
 
-# 初始化 Session State (保持不变)
+# 初始化 Session State
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'athlete_logged_in' not in st.session_state:
@@ -62,7 +65,7 @@ if 'login_password_input' not in st.session_state:
 if 'current_qr' not in st.session_state:
     st.session_state.current_qr = {'token': None, 'generated_at': 0, 'expiry': 0, 'checkpoint': CHECKPOINTS[0]}
 if 'scan_status' not in st.session_state:
-    st.session_state.scan_status = None # SUCCESS, DUPLICATE, ERROR
+    st.session_state.scan_status = None 
 if 'scan_result_info' not in st.session_state:
     st.session_state.scan_result_info = ""
 
@@ -75,8 +78,8 @@ DEFAULT_CONFIG = {
     "athlete_welcome_title": "恭喜您报名成功！",
     "athlete_welcome_message": "感谢您积极参加本单位的赛事活动，祝您能够取得好成绩。",
     "athlete_sign_in_message": "请使用手机扫描管理员提供的限时二维码进行计时签到。",
-    "QR_CODE_BASE_URL": "http://127.0.0.1:8501", # 默认本地地址
-    "QR_CODE_EXPIRY_SECONDS": 90, # 二维码默认有效期 90 秒
+    "QR_CODE_BASE_URL": "http://127.0.0.1:8501", 
+    "QR_CODE_EXPIRY_SECONDS": 90, 
     "users": {
         "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
@@ -211,7 +214,7 @@ def display_registration_form(config):
 
     st.info("请准确填写以下信息。**您的姓名为账号，手机号为密码。**")
     
-    # 【最终修复】使用 clear_on_submit=True 自动清理表单输入，并移除 key 属性以避免 Session State 冲突
+    # 使用 clear_on_submit=True 自动清理表单输入，并移除 key 属性以避免 Session State 冲突
     with st.form("registration_form", clear_on_submit=True): 
         
         # 不使用 key 属性
@@ -449,7 +452,10 @@ def display_athlete_welcome_page(config):
     st.info(config['athlete_sign_in_message'])
     
     st.markdown("---")
-    st.warning("⚠️ 扫描管理员提供的二维码即可完成计时。")
+    if not TOKEN_AVAILABLE:
+         st.error("⚠️ **计时功能不可用：** 服务器缺少安全库，请联系管理员安装 (`itsdangerous`, `qrcode`)。")
+    else:
+         st.warning("⚠️ 扫描管理员提供的二维码即可完成计时。")
 
 
 # --- 6. 页面函数：计时扫码 (管理员生成限时二维码) ---
@@ -512,7 +518,7 @@ def display_timing_scanner(config):
     if is_expired or current_qr_admin['token'] is None or is_mismatch:
         # 重新生成 Token
         generate_new_admin_qr(config, selected_checkpoint)
-        # 仅在需要时重新运行，避免循环
+        # 仅在需要时重新运行
         if st.session_state.current_qr['token'] is not None:
              st.experimental_rerun()
         return
@@ -1201,7 +1207,7 @@ def display_athlete_logout_button():
         st.session_state.athlete_logged_in = False
         st.session_state.athlete_username = None
         st.session_state.page_selection = "选手登记"
-        st.session_state.scan_status = None # 清除扫码状态
+        st.session_state.scan_status = None 
         st.session_state.scan_result_info = ""
         
     if st.sidebar.button("退出选手账号", on_click=set_athlete_logout):
