@@ -6,6 +6,34 @@ import time
 import json
 import re
 
+# --- 兼容 query_params 的辅助函数 ---
+def get_query_params():
+    """安全获取查询参数，兼容新旧 Streamlit 版本"""
+    try:
+        # Streamlit >= 1.30
+        return dict(st.query_params)
+    except AttributeError:
+        # Streamlit < 1.30
+        return st.experimental_get_query_params()
+
+def set_query_params(params_dict):
+    """安全设置查询参数，兼容新旧 Streamlit 版本"""
+    try:
+        # Streamlit >= 1.30
+        st.query_params.clear()
+        for k, v in params_dict.items():
+            st.query_params[k] = v
+    except AttributeError:
+        # Streamlit < 1.30
+        st.experimental_set_query_params(**params_dict)
+
+def clear_query_param(key):
+    """清除某个查询参数"""
+    params = get_query_params()
+    if key in params:
+        del params[key]
+        set_query_params(params)
+
 # --- 导入安全 Token 和二维码生成库 ---
 try:
     from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadTimeSignature
@@ -373,13 +401,12 @@ def display_athlete_welcome_page(config):
     # ----------------------------------------------------
     # 【核心逻辑】检查 URL 中的 Token 参数，执行计时
     # ----------------------------------------------------
-    query_params = st.query_params
-    token_param = query_params.get('token')
+    query_params = get_query_params()
+    token_param = query_params.get('token', [None])[0] if isinstance(query_params.get('token'), list) else query_params.get('token')
 
     if token_param:
         # 清除 URL 参数，防止重复记录
-        query_params.pop('token')
-        st.query_params = query_params # 立即清除参数
+        clear_query_param('token')
         
         if not TOKEN_AVAILABLE:
             st.error("🚨 计时失败：服务器缺少安全库 (itsdangerous/qrcode)，请联系管理员解决。")
@@ -846,468 +873,4 @@ def display_admin_data_management(config):
                     else:
                         final_save_df = merged_df[['athlete_id', 'department', 'name', 'gender', 'phone', 'username', 'password']]
                         save_athlete_data(final_save_df)
-                        st.success("✅ 选手资料修改已成功保存！(注意：姓名/手机号修改会同步更新账号/密码)")
-                        time.sleep(1)
-                        st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"保存失败：{e}")
-
-
-        elif data_table_select == "计时记录 (records)":
-            st.subheader("⏱️ 计时记录编辑")
-            df_records = load_records_data()
-            
-            st.info("提示：请谨慎修改时间戳。格式应为 YYYY-MM-DD HH:MM:SS.SSSSSS")
-            
-            edited_df = st.data_editor(
-                df_records,
-                num_rows="dynamic",
-                column_config={
-                    "checkpoint_type": st.column_config.Column("检查点类型", help="必须是 START, MID, FINISH 之一"),
-                },
-                key="edit_records_data",
-                use_container_width=True
-            )
-            
-            if st.button("💾 确认修改并保存计时记录"):
-                try:
-                    edited_df['timestamp'] = pd.to_datetime(edited_df['timestamp'], errors='raise')
-                    
-                    if not edited_df['checkpoint_type'].isin(CHECKPOINTS).all():
-                        st.error("保存失败：'checkpoint_type' 列包含无效值，必须是 START, MID, FINISH 之一。")
-                        return
-                        
-                    save_records_data(edited_df)
-                    st.success("✅ 计时记录修改已成功保存！")
-                    time.sleep(1)
-                    st.experimental_rerun()
-                except ValueError:
-                    st.error("保存失败：'timestamp' 列的日期时间格式不正确，请确保格式正确（如 YYYY-MM-DD HH:MM:SS.SSSSSS）。")
-                except Exception as e:
-                    st.error(f"保存失败：{e}")
-
-    # --- 系统配置修改页面 ---
-    elif data_select == "系统配置 (标题/用户/欢迎页)":
-        
-        config_option = st.radio("选择配置项", ["修改系统标题", "用户权限管理", "选手欢迎页配置"])
-
-        if config_option == "修改系统标题":
-            st.subheader("⚙️ 系统标题与登记页配置修改")
-            st.info("修改以下配置项后，点击保存，系统将自动重新加载以应用新标题。")
-
-            with st.form("config_form"):
-                st.text_input(
-                    "系统主标题 (侧边栏顶部和计时页面)",
-                    value=config['system_title'],
-                    key="new_sys_title"
-                )
-                
-                st.text_input(
-                    "选手登记页面标题",
-                    value=config['registration_title'],
-                    key="new_reg_title"
-                )
-
-                if st.form_submit_button("✅ 保存并应用配置", on_click=save_config_callback):
-                    st.success("配置已保存！系统正在重新加载...")
-                    time.sleep(1)
-                    st.experimental_rerun()
-        
-        elif config_option == "选手欢迎页配置":
-            st.subheader("📝 选手欢迎页和扫码提示配置")
-            st.info("配置选手登录后显示的标题、说明文字，以及计时扫码终端的提示文字。")
-            
-            with st.form("welcome_config_form"):
-                st.text_input(
-                    "欢迎页标题 (第一栏)",
-                    value=config['athlete_welcome_title'],
-                    key="new_welcome_title"
-                )
-                st.text_area(
-                    "欢迎页说明文字 (第二栏)",
-                    value=config['athlete_welcome_message'],
-                    key="new_welcome_message"
-                )
-                
-                st.text_area(
-                    "计时扫码提示信息 (终端提示)",
-                    value=config.get('athlete_sign_in_message', DEFAULT_CONFIG['athlete_sign_in_message']),
-                    key="new_sign_in_message"
-                )
-                
-                # 新增二维码 Base URL 和有效期配置
-                if TOKEN_AVAILABLE:
-                    st.markdown("---")
-                    st.subheader("🔗 扫码基本链接配置")
-                    st.warning("此链接是生成所有检查点二维码的基础，**必须**是您的 Streamlit 应用的公网地址！")
-
-                    st.text_input(
-                        "基本应用链接 (用于生成检查点二维码)",
-                        value=config.get('QR_CODE_BASE_URL', DEFAULT_CONFIG['QR_CODE_BASE_URL']),
-                        key="new_base_url",
-                        help="例如：`https://your-app-name.streamlit.app` 或 `http://your-ip:8501`"
-                    )
-
-                    st.number_input(
-                        "Token 有效期 (秒)",
-                        value=config.get('QR_CODE_EXPIRY_SECONDS', DEFAULT_CONFIG['QR_CODE_EXPIRY_SECONDS']),
-                        min_value=10,
-                        max_value=3600,
-                        step=10,
-                        key="new_qr_expiry",
-                        help="设置选手签到 Token 的有效时间，单位：秒 (S)"
-                    )
-                else:
-                     st.warning("⚠️ **缺少库：** 当前服务器未安装 `itsdangerous` 或 `qrcode`，扫码链接和有效期配置已禁用。请安装后使用。")
-                
-                if st.form_submit_button("✅ 保存欢迎页配置", on_click=save_config_callback):
-                    st.success("配置已保存！")
-                    time.sleep(1)
-                    st.experimental_rerun()
-
-
-        elif config_option == "用户权限管理":
-            display_user_management(config)
-
-
-# --- 9. 页面函数：归档与重置 (保持不变) ---
-
-def archive_and_reset_race_data():
-    """将当前数据归档，并清空活动文件以便开始新的比赛。"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    athletes_archived = False
-    records_archived = False
-
-    if os.path.exists(ATHLETES_FILE) and os.path.getsize(ATHLETES_FILE) > 0:
-        new_archive_name = f"ARCHIVE_ATHLETES_{timestamp}.csv"
-        os.rename(ATHLETES_FILE, new_archive_name)
-        athletes_archived = True
-    
-    if os.path.exists(RECORDS_FILE) and os.path.getsize(RECORDS_FILE) > 0:
-        new_archive_name = f"ARCHIVE_RECORDS_{timestamp}.csv"
-        os.rename(RECORDS_FILE, new_archive_name)
-        records_archived = True
-
-    # 重新创建空文件
-    load_athletes_data()
-    load_records_data()
-    
-    return athletes_archived or records_archived
-
-def get_archived_files():
-    """查找所有已归档的历史数据文件。"""
-    files = os.listdir('.')
-    archived = [f for f in files if f.startswith('ARCHIVE_')]
-    athletes_archives = sorted([f for f in archived if f.startswith('ARCHIVE_ATHLETES_')], reverse=True)
-    return athletes_archives
-
-
-def display_archive_reset():
-    """比赛数据归档与重置页面"""
-    
-    if not check_permission(["SuperAdmin"]):
-        st.error("您没有权限访问归档与重置功能。")
-        return
-
-    st.header("🗄️ 比赛归档与重置 (重要操作)")
-    
-    st.subheader("⚠️ 1. 结束当前比赛并归档数据")
-    st.warning("此操作将把当前的选手和计时数据归档，并清空当前比赛记录！请确保当前比赛已结束。")
-    
-    if st.button("🚀 归档并重置系统", type="primary"):
-        with st.spinner("正在归档数据..."):
-            if archive_and_reset_race_data():
-                st.success(f"✅ 数据归档成功！新比赛已准备就绪。")
-                st.info("归档文件已创建，请在下方的历史记录中查看。")
-                time.sleep(1)
-                st.experimental_rerun()
-            else:
-                st.error("归档失败或当前数据为空。")
-
-    st.markdown("---")
-
-    st.subheader("📜 2. 历史比赛数据查询")
-    athletes_archives = get_archived_files()
-    
-    if not athletes_archives:
-        st.info("暂无历史比赛归档数据。")
-        return
-
-    display_names = [f"文件: {f}" for f in athletes_archives]
-    selected_display_name = st.selectbox(
-        "选择要查询的选手归档文件 (日期/时间最新在前)",
-        options=display_names,
-        key="archive_athlete_file"
-    )
-    selected_athlete_file = athletes_archives[display_names.index(selected_display_name)]
-    selected_record_file = selected_athlete_file.replace("ATHLETES", "RECORDS")
-    
-    try:
-        if not os.path.exists(selected_record_file):
-             st.warning(f"警告：找不到对应的计时记录文件: {selected_record_file}。将仅显示选手列表。")
-             df_history_athletes = pd.read_csv(selected_athlete_file, dtype={'athlete_id': str})
-             st.subheader(f"👥 历史选手列表 ({len(df_history_athletes)} 人)")
-             st.dataframe(df_history_athletes, hide_index=True)
-             return
-
-        df_history_athletes = pd.read_csv(selected_athlete_file, dtype={'athlete_id': str})
-        df_history_records = pd.read_csv(selected_record_file, parse_dates=['timestamp'], dtype={'athlete_id': str})
-        
-        st.success(f"成功加载归档文件：{selected_athlete_file} 和 {selected_record_file}")
-        
-        df_history_calculated = calculate_net_time(df_history_records)
-        df_history_final = df_history_calculated.merge(df_history_athletes, on='athlete_id', how='left')
-        
-        st.subheader(f"📊 历史比赛统计")
-        
-        if not df_history_final.empty:
-            df_history_final = df_history_final.sort_values(by='total_time_sec', ascending=True).reset_index(drop=True)
-            df_history_final['排名'] = df_history_final.index + 1
-            df_history_final['总用时'] = df_history_final['total_time_sec'].apply(format_time)
-            
-            st.dataframe(
-                df_history_final[['排名', 'name', 'department', '总用时']].head(20),
-                caption="历史比赛排名前20 (完整排名请下载)",
-                hide_index=True
-            )
-            
-            csv_data = df_history_final.to_csv(encoding='utf-8-sig', index=False)
-            st.download_button(
-                label=f"💾 下载 {selected_athlete_file} 完整的历史排名数据",
-                data=csv_data,
-                file_name=f"RANKING_{selected_athlete_file}",
-                mime="text/csv"
-            )
-
-        else:
-            st.info("该历史文件中未找到完整的完赛记录。")
-            
-    except FileNotFoundError:
-        st.error("错误：找不到对应的历史记录文件。")
-    except Exception as e:
-        st.error(f"加载历史数据时发生错误：{e}")
-
-
-# --- 10. 页面函数：用户登录与登出 ---
-
-def set_login_success(config):
-    """设置管理员/裁判/领导的登录状态"""
-    username = st.session_state.login_username_input.strip().lower()
-    password = st.session_state.login_password_input
-    
-    if username in config['users'] and config['users'][username]['password'] == password:
-        st.session_state.logged_in = True
-        st.session_state.username = username
-        st.session_state.user_role = config['users'][username]['role']
-    else:
-        st.session_state.logged_in = False
-        st.session_state.user_role = None
-
-def set_athlete_login_success():
-    """设置选手的登录状态"""
-    athlete_username = st.session_state.athlete_login_username_input.strip()
-    athlete_password = st.session_state.athlete_login_password_input.strip()
-    
-    df_athletes = load_athletes_data()
-    
-    verified_athlete = df_athletes[
-        (df_athletes['username'] == athlete_username) & 
-        (df_athletes['password'] == athlete_password)
-    ]
-    
-    if not verified_athlete.empty:
-        st.session_state.athlete_logged_in = True
-        st.session_state.athlete_username = athlete_username
-        st.session_state.scan_status = None # 清除扫码状态
-    else:
-        st.session_state.athlete_logged_in = False
-        st.session_state.athlete_username = None
-
-def display_login_page(config):
-    """系统用户登录页面 (管理员/裁判/领导)"""
-    st.header("🔑 系统用户登录")
-    st.info("请输入您的用户名和密码以访问对应管理功能。")
-    
-    is_login_attempted = False
-    
-    with st.form("login_form"):
-        username = st.text_input("用户名", key="login_username_input")
-        password = st.text_input("密码", type="password", key="login_password_input")
-        
-        submitted = st.form_submit_button("登录", on_click=lambda: set_login_success(config))
-        
-        if submitted:
-            is_login_attempted = True
-    
-    if is_login_attempted:
-        if st.session_state.logged_in:
-            st.success("登录成功！正在进入功能页面...")
-            
-            # 根据角色设置 page_selection
-            role = st.session_state.user_role
-            if role in ["SuperAdmin", "Referee"]:
-                st.session_state.page_selection = "计时扫码"
-            elif role == "Leader":
-                st.session_state.page_selection = "排名结果"
-            else:
-                st.session_state.page_selection = "选手登记"
-                
-            st.session_state.login_password_input = "" 
-            time.sleep(1)
-            st.experimental_rerun()
-        else:
-            st.error("用户名或密码错误，请重试。")
-            st.session_state.login_password_input = ""
-
-
-def display_athlete_login_page(config):
-    """选手账号登录页面"""
-    st.header("🏃 选手账号登录")
-    st.info("选手请使用 **姓名** 作为账号，**手机号** 作为密码进行登录。")
-    
-    is_login_attempted = False
-    
-    with st.form("athlete_login_form"):
-        username = st.text_input("账号 (姓名)", key="athlete_login_username_input")
-        password = st.text_input("密码 (手机号)", type="password", key="athlete_login_password_input")
-        
-        submitted = st.form_submit_button("登录", on_click=set_athlete_login_success)
-        
-        if submitted:
-            is_login_attempted = True
-    
-    if is_login_attempted:
-        if st.session_state.athlete_logged_in:
-            st.success("登录成功！正在进入欢迎页面...")
-            st.session_state.page_selection = ATHLETE_WELCOME_PAGE
-            
-            st.session_state.athlete_login_password_input = "" 
-            time.sleep(1)
-            st.experimental_rerun()
-        else:
-            st.error("账号或密码错误，请检查您的姓名和手机号是否正确。")
-            st.session_state.athlete_login_password_input = ""
-
-
-def display_logout_button():
-    """退出登录按钮 (管理员/裁判/领导)"""
-    def set_logout():
-        st.session_state.logged_in = False
-        st.session_state.username = None
-        st.session_state.user_role = None
-        st.session_state.page_selection = "选手登记"
-        
-    if st.sidebar.button("退出管理账号", on_click=set_logout):
-        st.experimental_rerun()
-
-def display_athlete_logout_button():
-    """退出登录按钮 (选手)"""
-    def set_athlete_logout():
-        st.session_state.athlete_logged_in = False
-        st.session_state.athlete_username = None
-        st.session_state.page_selection = "选手登记"
-        st.session_state.scan_status = None 
-        st.session_state.scan_result_info = ""
-        
-    if st.sidebar.button("退出选手账号", on_click=set_athlete_logout):
-        st.experimental_rerun()
-
-
-# --- 11. Streamlit 主应用入口 ---
-
-def main_app():
-    # 1. 加载配置和数据
-    config = load_config()
-    load_athletes_data()
-    load_records_data()
-    
-    # 2. 侧边栏标题使用配置
-    st.sidebar.title(f"🏁 {config['system_title']}")
-    
-    # 3. 定义导航列表 (根据权限动态生成)
-    
-    pages = ["选手登记"] # 始终保留登记页作为起点
-    
-    # 选手已登录
-    if st.session_state.athlete_logged_in:
-        st.sidebar.write(f"当前选手：**{st.session_state.athlete_username}**")
-        pages = [ATHLETE_WELCOME_PAGE] # 选手登录后，只显示欢迎页
-        display_athlete_logout_button()
-    
-    # 管理员/系统用户已登录
-    elif st.session_state.logged_in:
-        role = st.session_state.user_role
-        st.sidebar.write(f"管理用户：**{st.session_state.username}** ({role})")
-        
-        pages = ["选手登记"] # 管理员/裁判也应该能看到登记页
-
-        # 权限页面
-        if role in ["SuperAdmin", "Referee"]: pages.append("计时扫码")
-        if role in ["SuperAdmin", "Leader"]: pages.append("排名结果")
-        if role in ["SuperAdmin", "Referee"]: pages.append("数据管理")
-        if role == "SuperAdmin": pages.append("归档与重置")
-            
-        display_logout_button()
-        
-    # 未登录 (默认显示登记、选手登录、管理员登录)
-    else:
-        pages.append(ATHLETE_LOGIN_PAGE)
-        pages.append(LOGIN_PAGE)
-
-
-    # 4. 确保当前的页面选择在可用列表中
-    if st.session_state.page_selection not in pages:
-        # 如果当前页面不在权限列表中，默认跳转到第一个有权限的页面
-        st.session_state.page_selection = pages[0]
-    
-    # 5. 导航栏
-    page_index = pages.index(st.session_state.page_selection) if st.session_state.page_selection in pages else 0
-    page = st.sidebar.radio("选择功能模块", pages,
-                            index=page_index,
-                            key='page_selection')
-
-    # 6. 路由 (根据权限显示内容)
-    if page == "选手登记":
-        display_registration_form(config)
-    elif page == ATHLETE_LOGIN_PAGE:
-        display_athlete_login_page(config)
-    elif page == ATHLETE_WELCOME_PAGE:
-        display_athlete_welcome_page(config)
-    elif page == LOGIN_PAGE:
-        display_login_page(config)
-    elif page == "计时扫码":
-        if check_permission(["SuperAdmin", "Referee"]):
-            display_timing_scanner(config)
-        else:
-            st.error("您无权访问计时扫码功能，请联系管理员。")
-    elif page == "排名结果":
-        if check_permission(["SuperAdmin", "Leader"]):
-            display_results_ranking()
-        else:
-            st.error("您无权访问排名结果。")
-    elif page == "数据管理":
-        if check_permission(["SuperAdmin", "Referee"]):
-            display_admin_data_management(config)
-        else:
-            st.error("您无权访问数据管理。")
-    elif page == "归档与重置":
-        if check_permission(["SuperAdmin"]):
-            display_archive_reset()
-        else:
-            st.error("您无权访问归档与重置。")
-
-    st.sidebar.markdown("---")
-    st.sidebar.info("数据下载和修改请前往 '数据管理' 模块。")
-
-
-if __name__ == '__main__':
-    # 预加载配置，用于设置浏览器标签页标题
-    initial_config = load_config()
-    
-    st.set_page_config(
-        page_title=initial_config['system_title'],
-        page_icon="🏃",
-        layout="wide"
-    )
-    main_app()
+                        st.success("✅ 选手资料修改已成功保存！(
