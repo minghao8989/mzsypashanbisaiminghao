@@ -63,7 +63,7 @@ DEFAULT_CONFIG = {
     "QR_CODE_BASE_URL": "http://127.0.0.1:8501", 
     "QR_CODE_EXPIRY_SECONDS": 90,
     "users": {
-        "admin": {"password": "123", "role": "SuperAdmin"},
+        "admin": {"password": "admin_123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
         "referee01": {"password": "referee_pass", "role": "Referee"}
     }
@@ -398,3 +398,4 @@ def main_app():
 if __name__ == '__main__':
     st.set_page_config(page_title="赛事管理系统", page_icon="🏃", layout="wide")
     main_app()
+
