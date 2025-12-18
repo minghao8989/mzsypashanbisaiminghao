@@ -73,7 +73,7 @@ DEFAULT_CONFIG = {
     "QR_CODE_BASE_URL": "http://127.0.0.1:8501", # 默认本地地址
     "QR_CODE_EXPIRY_SECONDS": 90, # 二维码默认有效期 90 秒
     "users": {
-        "admin": {"password": "admin_password_123", "role": "SuperAdmin"},
+        "admin": {"password": "123", "role": "SuperAdmin"},
         "leader01": {"password": "leader_pass", "role": "Leader"},
         "referee01": {"password": "referee_pass", "role": "Referee"}
     }
@@ -1301,3 +1301,4 @@ if __name__ == '__main__':
         layout="wide"
     )
     main_app()
+
