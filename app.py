@@ -24,11 +24,10 @@ def get_serializer(key):
 ATHLETES_FILE = 'athletes.csv'
 RECORDS_FILE = 'timing_records.csv'
 CONFIG_FILE = 'config.json'
-
-LOGIN_PAGE = "系统用户登录"
-ATHLETE_LOGIN_PAGE = "选手登录"
-ATHLETE_WELCOME_PAGE = "选手欢迎页"
 CHECKPOINTS = ['START', 'MID', 'FINISH']
+ATHLETE_WELCOME_PAGE = "选手欢迎页"
+ATHLETE_LOGIN_PAGE = "选手登录"
+LOGIN_PAGE = "系统用户登录"
 
 # 初始化 Session State
 state_defaults = {
@@ -38,8 +37,6 @@ state_defaults = {
     'user_role': None,
     'athlete_username': None,
     'page_selection': "选手登记",
-    'scan_status': None,
-    'scan_result_info': "",
     'current_qr': {'token': None, 'generated_at': 0, 'expiry': 0, 'checkpoint': CHECKPOINTS[0]},
     'show_manual_scan_info': False
 }
@@ -102,23 +99,21 @@ def format_time(seconds):
     if pd.isna(seconds): return 'N/A'
     return f"{int(seconds//60):02d}:{seconds%60:06.3f}"
 
-# --- 3. 页面模块 ---
+# --- 3. 核心页面逻辑 ---
 
 def display_registration_form(config):
     st.header(f"👤 {config['registration_title']}")
     with st.form("reg_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         dept = col1.text_input("单位/部门")
-        team = col2.text_input("团队名称", value="无", help="个人参赛请填写“无”，团体参赛请填写统一的队伍名称")
+        team = col2.text_input("团队名称", value="无")
         name = col1.text_input("姓名")
         gender = col2.selectbox("性别", ["男", "女", "其他"])
         phone = st.text_input("手机号")
         if st.form_submit_button("提交报名"):
-            if not name or not phone:
-                st.error("姓名和手机号是必填项！"); return
+            if not name or not phone: st.error("必填项不能为空"); return
             df = load_athletes_data()
-            if phone in df['phone'].values:
-                st.error("此手机号已登记过！"); return
+            if phone in df['phone'].values: st.error("手机号已存在"); return
             new_id = str(int(df['athlete_id'].astype(int).max() + 1)) if not df.empty else "1001"
             new_row = pd.DataFrame([{'athlete_id': new_id, 'department': dept, 'team_name': team if team else "无", 
                                      'name': name, 'gender': gender, 'phone': phone, 'username': name, 'password': phone}])
@@ -129,7 +124,6 @@ def display_athlete_welcome_page(config):
     df_ath = load_athletes_data()
     user = df_ath[df_ath['username'] == st.session_state.athlete_username].iloc[0]
     
-    # Token 扫码逻辑
     token = st.query_params.get('token')
     if token:
         st.query_params.clear()
@@ -141,77 +135,46 @@ def display_athlete_welcome_page(config):
                 new_rec = pd.DataFrame([{'athlete_id': user['athlete_id'], 'checkpoint_type': cp, 'timestamp': datetime.now()}])
                 save_csv_safe(pd.concat([df_rec, new_rec], ignore_index=True), RECORDS_FILE)
                 st.toast(f"✅ {cp} 签到成功！", icon="🎉")
-            else:
-                st.toast("此点位已签过到", icon="🚨")
             time.sleep(1); st.rerun()
         except: st.error("二维码无效或过期")
 
     st.header(f"🎉 {config['athlete_welcome_title']}")
-    st.info(f"选手：{user['name']} | 编号：{user['athlete_id']} | 团队：{user['team_name']}")
-    
-    # 进度显示
-    rec = load_records_data()
-    done = rec[rec['athlete_id'] == user['athlete_id']]['checkpoint_type'].tolist()
-    st.write("🏁 **签到进度：**")
+    st.info(f"选手：{user['name']} | 团队：{user['team_name']}")
+    rec = load_records_data(); done = rec[rec['athlete_id'] == user['athlete_id']]['checkpoint_type'].tolist()
     cols = st.columns(len(CHECKPOINTS))
-    for i, cp in enumerate(CHECKPOINTS):
-        cols[i].metric(label=cp, value="✅" if cp in done else "⚪")
-
+    for i, cp in enumerate(CHECKPOINTS): cols[i].metric(cp, "✅" if cp in done else "⚪")
     st.markdown("---")
-    st.write(config['athlete_welcome_message'])
-    if st.button("▶️ 开启扫码计时", type="primary"):
-        st.session_state.show_manual_scan_info = True
-    if st.session_state.show_manual_scan_info:
-        st.warning(config['athlete_sign_in_message'])
-    st.markdown("---")
+    if st.button("▶️ 开启扫码计时", type="primary"): st.session_state.show_manual_scan_info = True
+    if st.session_state.show_manual_scan_info: st.warning(config['athlete_sign_in_message'])
     st.info(f"📢 **赛事公告：**\n\n{config['athlete_notice']}")
 
 def display_team_ranking():
     st.header("👥 团体成绩排名")
-    df_rec = load_records_data()
-    df_ath = load_athletes_data()
-    df_res = calculate_net_time(df_rec)
-    
-    if df_res.empty:
-        st.warning("目前没有完整的完赛数据。"); return
-
-    df_full = df_res.merge(df_ath, on='athlete_id', how='left')
-    # 过滤掉团队名为“无”的个人选手
+    df_full = calculate_net_time(load_records_data()).merge(load_athletes_data(), on='athlete_id', how='left')
     df_teams = df_full[df_full['team_name'] != "无"]
-    
-    if df_teams.empty:
-        st.info("暂无团体参赛记录（所有完赛选手均为个人参赛）。"); return
-
-    team_stats = df_teams.groupby('team_name').agg(
-        完赛人数=('athlete_id', 'count'),
-        总用时秒=('total_time_sec', 'sum')
-    ).reset_index()
-    
+    if df_teams.empty: st.info("暂无团体完赛记录"); return
+    team_stats = df_teams.groupby('team_name').agg(完赛人数=('athlete_id', 'count'), 总用时秒=('total_time_sec', 'sum')).reset_index()
     team_stats['平均用时秒'] = team_stats['总用时秒'] / team_stats['完赛人数']
     team_stats = team_stats.sort_values('平均用时秒').reset_index(drop=True)
     team_stats['排名'] = team_stats.index + 1
     team_stats['平均用时'] = team_stats['平均用时秒'].apply(format_time)
-    
     st.dataframe(team_stats[['排名', 'team_name', '完赛人数', '平均用时']], use_container_width=True, hide_index=True)
 
-# --- 4. 主流程 ---
+# --- 4. 主程序 ---
 
 def main_app():
     config = load_config()
     st.sidebar.title(f"🏁 {config['system_title']}")
     
-    # 动态菜单
     pages = ["选手登记"]
     if st.session_state.athlete_logged_in:
         pages = [ATHLETE_WELCOME_PAGE]
-        if st.sidebar.button("退出选手"): st.session_state.athlete_logged_in = False; st.rerun()
     elif st.session_state.logged_in:
         role = st.session_state.user_role
         pages += ["个人中心"]
         if role in ["SuperAdmin", "Referee"]: pages += ["计时扫码", "数据管理"]
         if role in ["SuperAdmin", "Leader"]: pages += ["个人排名", "团体排名"]
         if role == "SuperAdmin": pages += ["归档与重置"]
-        if st.sidebar.button("退出管理"): st.session_state.logged_in = False; st.rerun()
     else:
         pages += [ATHLETE_LOGIN_PAGE, LOGIN_PAGE]
 
@@ -220,73 +183,88 @@ def main_app():
 
     if page == "选手登记": display_registration_form(config)
     elif page == ATHLETE_LOGIN_PAGE:
-        with st.form("a_login"):
-            u = st.text_input("姓名")
-            p = st.text_input("手机号", type="password")
+        with st.form("a_l"):
+            u = st.text_input("姓名"); p = st.text_input("手机号", type="password")
             if st.form_submit_button("选手登录"):
                 df = load_athletes_data()
                 if not df[(df['username'] == u) & (df['password'] == p)].empty:
-                    st.session_state.athlete_logged_in, st.session_state.athlete_username, st.session_state.page_selection = True, u, ATHLETE_WELCOME_PAGE
+                    st.session_state.athlete_logged_in, st.session_state.athlete_username = True, u
                     st.rerun()
-                else: st.error("姓名或手机号错误")
     elif page == ATHLETE_WELCOME_PAGE: display_athlete_welcome_page(config)
     elif page == LOGIN_PAGE:
-        with st.form("m_login"):
-            u = st.text_input("账号")
-            p = st.text_input("密码", type="password")
+        with st.form("m_l"):
+            u = st.text_input("账号"); p = st.text_input("密码", type="password")
             if st.form_submit_button("管理登录"):
                 if u in config['users'] and config['users'][u]['password'] == p:
                     st.session_state.logged_in, st.session_state.username, st.session_state.user_role = True, u, config['users'][u]['role']
                     st.rerun()
-                else: st.error("登录失败")
     elif page == "个人排名":
         st.header("🏆 个人排名")
         df_res = calculate_net_time(load_records_data()).merge(load_athletes_data(), on='athlete_id', how='left').sort_values('total_time_sec')
-        df_res['排名'] = range(1, len(df_res)+1)
-        df_res['用时'] = df_res['total_time_sec'].apply(format_time)
+        df_res['排名'] = range(1, len(df_res)+1); df_res['用时'] = df_res['total_time_sec'].apply(format_time)
         st.dataframe(df_res[['排名', 'name', 'team_name', '用时']], use_container_width=True, hide_index=True)
     elif page == "团体排名": display_team_ranking()
     elif page == "计时扫码":
-        cp = st.selectbox("检查点", CHECKPOINTS)
-        qr_state = st.session_state.current_qr
-        now = time.time()
+        cp = st.selectbox("检查点", CHECKPOINTS); now = time.time(); qr_state = st.session_state.current_qr
         if qr_state['checkpoint'] != cp or (now - qr_state['generated_at'] > config['QR_CODE_EXPIRY_SECONDS']):
             token = get_serializer(SECRET_KEY).dumps({'cp': cp}, salt='checkpoint-timing')
             st.session_state.current_qr = {'token': token, 'generated_at': now, 'url': f"{config['QR_CODE_BASE_URL']}?token={token}", 'checkpoint': cp}
             st.rerun()
-        qr_img = qrcode.make(st.session_state.current_qr['url'])
-        buf = io.BytesIO(); qr_img.save(buf, format="PNG")
-        st.image(buf.getvalue(), caption=f"请扫描 {cp}", width=300)
+        st.image(io.BytesIO(qrcode.make(st.session_state.current_qr['url']).tobytes() if False else qrcode.make(st.session_state.current_qr['url']).save(buf:=io.BytesIO(), format="PNG") or buf.getvalue()), caption=f"请扫描 {cp}", width=300)
         st.write(f"刷新倒计时: {int(config['QR_CODE_EXPIRY_SECONDS'] - (now - qr_state['generated_at']))} 秒")
         time.sleep(1); st.rerun()
     elif page == "数据管理":
-        tab1, tab2 = st.tabs(["数据表", "权限与配置"])
-        with tab1:
-            df_ath = load_athletes_data()
-            new_ath = st.data_editor(df_ath, num_rows="dynamic")
-            if st.button("更新数据"): save_csv_safe(new_ath, ATHLETES_FILE); st.success("已同步")
-        with tab2:
+        t1, t2 = st.tabs(["数据", "配置"])
+        with t1:
+            df = load_athletes_data(); edited = st.data_editor(df, num_rows="dynamic")
+            if st.button("同步数据"): save_csv_safe(edited, ATHLETES_FILE); st.success("已更新")
+        with t2:
             config['system_title'] = st.text_input("标题", config['system_title'])
-            config['QR_CODE_BASE_URL'] = st.text_input("部署URL", config['QR_CODE_BASE_URL'])
-            config['athlete_notice'] = st.text_area("公告内容", config['athlete_notice'])
+            config['athlete_notice'] = st.text_area("公告", config['athlete_notice'])
             if st.button("保存设置"): save_config(config); st.rerun()
             if st.session_state.user_role == "SuperAdmin":
                 user_data = [{"用户名": u, "角色": d['role'], "密码": d['password']} for u, d in config['users'].items()]
                 ed = st.data_editor(pd.DataFrame(user_data), num_rows="dynamic", column_config={"角色": st.column_config.SelectboxColumn("权限", options=["SuperAdmin", "Leader", "Referee"])})
-                if st.button("保存账号"):
-                    config['users'] = {row['用户名']: {"password": str(row['密码']), "role": row['角色']} for _, row in ed.iterrows() if row['用户名']}
-                    save_config(config); st.rerun()
+                if st.button("保存账号"): config['users'] = {row['用户名']: {"password": str(row['密码']), "role": row['角色']} for _, row in ed.iterrows() if row['用户名']}; save_config(config); st.rerun()
     elif page == "个人中心":
-        st.subheader("🔑 修改密码")
         new_p = st.text_input("新密码", type="password")
-        if st.button("确认"):
-            config['users'][st.session_state.username]['password'] = new_p; save_config(config); st.success("成功")
+        if st.button("修改"): config['users'][st.session_state.username]['password'] = new_p; save_config(config); st.success("成功")
     elif page == "归档与重置":
         if st.button("执行重置", type="primary"):
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             for f in [ATHLETES_FILE, RECORDS_FILE]:
                 if os.path.exists(f): os.rename(f, f"ARCHIVE_{ts}_{f}")
             st.rerun()
+
+    if st.sidebar.button("退出登录"):
+        st.session_state.athlete_logged_in = False
+        st.session_state.logged_in = False
+        st.rerun()
+
+    # --- 右下角版权信息 ---
+    st.markdown(
+        """
+        <style>
+        .footer {
+            position: fixed;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            background-color: rgba(255, 255, 255, 0.8);
+            color: #888888;
+            text-align: right;
+            padding-right: 20px;
+            padding-bottom: 5px;
+            font-size: 12px;
+            z-index: 100;
+        }
+        </style>
+        <div class="footer">
+            版权归设备科张明豪制作
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 if __name__ == '__main__':
     st.set_page_config(page_title="登山赛管理系统", layout="wide")
